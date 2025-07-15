@@ -210,12 +210,13 @@ async def main():
     """
     Main asynchronous function to orchestrate the process.
     """
-    NODE_TIMEOUT = 30.0
+    BASE_NODE_TIMEOUT = 30.0
+    SECONDS_PER_COMMAND = 5.0
 
     if len(sys.argv) > 1:
         if sys.argv[1] in ('-h', '--help'):
             print("Usage: python async_multi_node_runner.py [path_to_your_csv_file]")
-            print(f"Default node timeout is {NODE_TIMEOUT} seconds.")
+            print(f"Base node timeout is {BASE_NODE_TIMEOUT} seconds, plus {SECONDS_PER_COMMAND} seconds per command.")
             return
         csv_file = sys.argv[1]
         print(f"Using specified CSV file: {csv_file}")
@@ -249,10 +250,16 @@ async def main():
             print(f"*** SKIPPING: Unknown protocol '{protocol}' for node {node['nodename']} ***")
         
         if task:
-            tasks.append(asyncio.wait_for(task, timeout=NODE_TIMEOUT))
+            num_commands = len(node.get('commands', []))
+            if node.get('additional_command_1'):
+                num_commands += 1
+            
+            node_timeout = BASE_NODE_TIMEOUT + (num_commands * SECONDS_PER_COMMAND)
+            print(f"Setting timeout for {node['nodename']} to {node_timeout} seconds ({num_commands} commands).")
+            tasks.append(asyncio.wait_for(task, timeout=node_timeout))
 
     total_tasks = len(tasks)
-    print(f"Processing {total_tasks} nodes with a {NODE_TIMEOUT}-second timeout per node...")
+    print(f"Processing {total_tasks} nodes...")
     print_progress_bar(0, total_tasks)
 
     results = []
@@ -261,7 +268,8 @@ async def main():
             result = await f
             results.append(result)
         except asyncio.TimeoutError:
-            print(f"\nWarning: A node task timed out after {NODE_TIMEOUT} seconds and was skipped.")
+            # It's hard to know which node timed out here without more complex tracking.
+            print(f"\nWarning: A node task timed out and was skipped.")
         finally:
             print_progress_bar(len(results), total_tasks)
 
