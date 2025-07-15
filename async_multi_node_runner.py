@@ -4,6 +4,7 @@ import os
 import sys
 import zipfile
 from datetime import datetime
+from itertools import zip_longest # <--- Added import
 
 # Third-party library: asyncssh. Please install it using: pip install asyncssh
 try:
@@ -35,7 +36,8 @@ def parse_nodes_from_csv(file_path):
             reader = list(csv.reader(csvfile))
             if not reader:
                 return []
-            transposed_data = list(map(list, zip(*reader)))
+            # Transpose the data safely, filling missing values with an empty string
+            transposed_data = list(zip_longest(*reader, fillvalue=''))
             headers = [h.strip() for h in transposed_data[0]]
             for i in range(1, len(transposed_data)):
                 node_info = {"commands": []}
