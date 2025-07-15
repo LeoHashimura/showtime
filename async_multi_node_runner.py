@@ -96,7 +96,9 @@ async def execute_telnet_async(node_info):
             writer.write(cmd.encode('ascii') + b'\n')
             await writer.drain()
             await asyncio.sleep(2)
-            output_log += (await reader.read(65535)).decode('ascii', errors='ignore')
+            response = (await reader.read(65535)).decode('ascii', errors='ignore')
+            print(f"\n--- Output from {node_info['nodename']} after '{cmd}' ---\n{response}\n-------------------------------------")
+            output_log += response
 
         writer.write(b"exit\n")
         await writer.drain()
@@ -136,7 +138,9 @@ async def execute_ssh_async(node_info):
                     output_log += f"\n>>> Executing command: {cmd}\n"
                     process.stdin.write(cmd + '\n')
                     await asyncio.sleep(2)
-                    output_log += await process.stdout.read(65535)
+                    response = await process.stdout.read(65535)
+                    print(f"\n--- Output from {node_info['nodename']} after '{cmd}' ---\n{response}\n-------------------------------------")
+                    output_log += response
                 
                 process.stdin.write('exit\n')
                 await process.wait()
@@ -164,13 +168,16 @@ async def main():
     """
     Main asynchronous function to orchestrate the process.
     """
+    # --- Configuration ---
+    # Set a global timeout in seconds for each node connection and command execution
+    NODE_TIMEOUT = 30.0
+
     # Check for a command-line argument for the CSV file
     if len(sys.argv) > 1:
-        # Check for help flag
         if sys.argv[1] in ('-h', '--help'):
             print("Usage: python async_multi_node_runner.py [path_to_your_csv_file]")
-            print("If no file is provided, the script will look for 'nodes.csv'.")
-            return # Exit the main function
+            print(f"Default node timeout is {NODE_TIMEOUT} seconds.")
+            return
         csv_file = sys.argv[1]
         print(f"Using specified CSV file: {csv_file}")
     else:
@@ -194,22 +201,34 @@ async def main():
     tasks = []
     for node in nodes:
         protocol = node.get('protocol', 'ssh').lower()
+        task = None
         if protocol == 'ssh':
-            tasks.append(execute_ssh_async(node))
+            task = execute_ssh_async(node)
         elif protocol == 'telnet':
-            tasks.append(execute_telnet_async(node))
+            task = execute_telnet_async(node)
         else:
             print(f"*** SKIPPING: Unknown protocol '{protocol}' for node {node['nodename']} ***")
+        
+        if task:
+            # Wrap the node-specific task in a global timeout
+            tasks.append(asyncio.wait_for(task, timeout=NODE_TIMEOUT))
 
     total_tasks = len(tasks)
-    print(f"Processing {total_tasks} nodes...")
+    print(f"Processing {total_tasks} nodes with a {NODE_TIMEOUT}-second timeout per node...")
     print_progress_bar(0, total_tasks)
 
     results = []
     for i, f in enumerate(asyncio.as_completed(tasks)):
-        result = await f
-        results.append(result)
-        print_progress_bar(i + 1, total_tasks)
+        try:
+            result = await f
+            results.append(result)
+        except asyncio.TimeoutError:
+            # This block will be executed if a node task exceeds the NODE_TIMEOUT
+            # We need to find which node it was, but the task itself is cancelled.
+            # This is a limitation of as_completed. The primary goal is to not hang.
+            print(f"\nWarning: A node task timed out after {NODE_TIMEOUT} seconds and was skipped.")
+        finally:
+            print_progress_bar(i + 1, total_tasks)
 
     log_files = []
     print("\nProcessing results and writing log files...")
