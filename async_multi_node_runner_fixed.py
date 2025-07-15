@@ -162,7 +162,7 @@ async def execute_ssh_async(node_info):
             password=node_info['login_password'],
             known_hosts=None
         ) as conn:
-            async with conn.create_process(term_type='vt100') as process:
+            async with conn.create_process(term_type='vt100', encoding=None) as process:
                 initial_output = await read_until_prompt(process.stdout)
                 output_log += initial_output
                 print(f"\n--- Initial connection to {node_info['nodename']} ---\n{initial_output}\n-------------------------------------")
@@ -170,19 +170,19 @@ async def execute_ssh_async(node_info):
                 if node_info.get('additional_command_1') and ">" in initial_output:
                     cmd = node_info['additional_command_1']
                     output_log += f"\n>>> Executing command: {cmd}\n"
-                    process.stdin.write(cmd + '\n')
+                    process.stdin.write((cmd + '\n').encode('utf-8'))
                     response = await read_until_prompt(process.stdout)
                     print(f"\n--- Output from {node_info['nodename']} after '{cmd}' ---\n{response}\n-------------------------------------")
                     output_log += response
 
                 for cmd in node_info['commands']:
                     output_log += f"\n>>> Executing command: {cmd}\n"
-                    process.stdin.write(cmd + '\n')
+                    process.stdin.write((cmd + '\n').encode('utf-8'))
                     response = await read_until_prompt(process.stdout)
                     print(f"\n--- Output from {node_info['nodename']} after '{cmd}' ---\n{response}\n-------------------------------------")
                     output_log += response
                 
-                process.stdin.write('exit\n')
+                process.stdin.write(b'exit\n')
                 await process.wait()
 
         output_log += "\n--- Disconnected ---"
