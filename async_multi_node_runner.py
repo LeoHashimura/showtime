@@ -162,7 +162,19 @@ async def main():
     """
     Main asynchronous function to orchestrate the process.
     """
-    csv_file = 'nodes.csv'
+    # Check for a command-line argument for the CSV file
+    if len(sys.argv) > 1:
+        # Check for help flag
+        if sys.argv[1] in ('-h', '--help'):
+            print("Usage: python async_multi_node_runner.py [path_to_your_csv_file]")
+            print("If no file is provided, the script will look for 'nodes.csv'.")
+            return # Exit the main function
+        csv_file = sys.argv[1]
+        print(f"Using specified CSV file: {csv_file}")
+    else:
+        csv_file = 'nodes.csv'
+        print(f"No CSV file specified, defaulting to '{csv_file}'")
+
     nodes = parse_nodes_from_csv(csv_file)
 
     if nodes is None:
@@ -220,6 +232,10 @@ async def main():
     print("=====================================================")
 
 if __name__ == "__main__":
+    # On Windows, the default event loop policy can cause issues with asyncssh.
     if os.name == 'nt':
         asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    asyncio.run(main())
+    
+    # Use the legacy method for Python 3.6 and below
+    loop = asyncio.get_event_loop()
+    loop.run_until_complete(main())
