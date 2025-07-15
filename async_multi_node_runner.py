@@ -123,7 +123,8 @@ async def execute_ssh_async(node_info):
             password=node_info['login_password'],
             known_hosts=None
         ) as conn:
-            async with conn.create_process() as process:
+            # Request a pseudo-terminal (TTY) to handle interactive-like sessions
+            async with conn.create_process(term_type='vt100') as process:
                 await asyncio.sleep(1)
                 initial_output = await process.stdout.read(65535)
                 output_log += initial_output
