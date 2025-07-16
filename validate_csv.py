@@ -2,6 +2,18 @@ import csv
 import sys
 from itertools import zip_longest
 
+import csv
+import sys
+from itertools import zip_longest
+
+def has_bom(file_path):
+    """Checks if a file starts with the UTF-8 BOM."""
+    try:
+        with open(file_path, 'rb') as f:
+            return f.read(3) == b'\xef\xbb\xbf'
+    except Exception:
+        return False
+
 def validate_csv(file_path):
     """
     Validates the structure and content of the node CSV file to ensure
@@ -10,8 +22,22 @@ def validate_csv(file_path):
     print(f"--- Starting validation of {file_path} ---")
     is_valid = True
 
+    # 1. Check for invisible BOM character
+    if has_bom(file_path):
+        print("Error: File contains a hidden UTF-8 BOM character at the start.")
+        print("This will cause parsing errors. Please remove it by resaving the file.")
+        print("\nTo fix this, you can create a corrected file using this PowerShell command:")
+        print(f'  (Get-Content {file_path}) | Set-Content {file_path}_fixed.csv -Encoding utf8')
+        print("\nAlternatively, if you have `sed` (e.g., Git Bash, WSL), you can use:")
+        print(f"  sed -i '1s/^\\xef\\xbb\\xbf//' {file_path}")
+        is_valid = False
+    else:
+        print("(OK) File encoding appears to be standard (no BOM).")
+
     try:
-        with open(file_path, 'r', newline='') as csvfile:
+        # Use 'utf-8-sig' to handle BOM transparently for the validator itself,
+        # even though we've already warned the user about it.
+        with open(file_path, 'r', newline='', encoding='utf-8-sig') as csvfile:
             reader = list(csv.reader(csvfile))
             if not reader:
                 print("Error: CSV file is empty.")
@@ -26,7 +52,7 @@ def validate_csv(file_path):
     # Transpose data to validate by columns (nodes)
     transposed_data = list(zip_longest(*reader, fillvalue=''))
     
-    # 1. Validate Headers
+    # 2. Validate Headers
     headers = [h.strip().lower() for h in transposed_data[0]]
     required_headers = {'nodename', 'protocol', 'ip_address', 'login_id', 'login_password'}
     
@@ -35,9 +61,9 @@ def validate_csv(file_path):
         print(f"Error: CSV is missing required headers: {', '.join(missing_headers)}")
         is_valid = False
     else:
-        print("✓ Headers are valid.")
+        print("(OK) Headers are valid.")
 
-    # 2. Validate each node column
+    # 3. Validate each node column
     if len(transposed_data) < 2:
         print("Warning: CSV file contains headers but no node data.")
         return is_valid
@@ -67,7 +93,7 @@ def validate_csv(file_path):
             is_valid = False
 
     if is_valid:
-        print(f"✓ All {len(transposed_data) - 1} node entries appear to be correctly formatted.")
+        print(f"(OK) All {len(transposed_data) - 1} node entries appear to be correctly formatted.")
     
     return is_valid
 

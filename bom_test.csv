@@ -1,0 +1,6 @@
+﻿Field,NodeA
+nodename,Test-Router
+protocol,ssh
+ip_address,192.168.1.10
+login_id,admin
+login_password,password

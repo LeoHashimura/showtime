@@ -109,10 +109,45 @@ async def execute_telnet_async(node_info):
             timeout=10
         )
 
-        await asyncio.wait_for(reader.readuntil(b"Username: "), timeout=5)
+        # More robust, case-insensitive login prompt detection
+        buffer = b""
+        prompt_found = False
+        for _ in range(20):  # Max 10 seconds for username/login
+            try:
+                chunk = await asyncio.wait_for(reader.read(100), timeout=0.5)
+                if not chunk:
+                    raise ConnectionError("Telnet connection closed while waiting for login prompt.")
+                buffer += chunk
+                if any(p in buffer.lower() for p in [b'username:', b'login:']):
+                    prompt_found = True
+                    break
+            except asyncio.TimeoutError:
+                pass  # No data received in this interval, try again.
+        
+        if not prompt_found:
+            raise asyncio.TimeoutError(f"Timeout waiting for username/login prompt. Received: {buffer.decode(errors='ignore')}")
+
         writer.write(node_info['login_id'].encode('ascii') + b"\n")
         await writer.drain()
-        await asyncio.wait_for(reader.readuntil(b"Password: "), timeout=5)
+
+        # More robust, case-insensitive password prompt detection
+        buffer = b""
+        prompt_found = False
+        for _ in range(10):  # Max 5 seconds for password
+            try:
+                chunk = await asyncio.wait_for(reader.read(100), timeout=0.5)
+                if not chunk:
+                    raise ConnectionError("Telnet connection closed while waiting for password prompt.")
+                buffer += chunk
+                if b'password:' in buffer.lower():
+                    prompt_found = True
+                    break
+            except asyncio.TimeoutError:
+                pass  # No data received in this interval, try again.
+
+        if not prompt_found:
+            raise asyncio.TimeoutError(f"Timeout waiting for password prompt. Received: {buffer.decode(errors='ignore')}")
+
         writer.write(node_info['login_password'].encode('ascii') + b"\n")
         await writer.drain()
 
