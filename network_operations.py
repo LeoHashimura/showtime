@@ -4,7 +4,7 @@ import asyncssh
 
 PROMPT_RE = re.compile(b'\S+[>#:$]\s*$')
 
-async def read_until_prompt(stream, timeout=20):
+async def read_until_prompt(stream, timeout=40):
     """
     Reads from a stream until a prompt is detected or a timeout occurs.
     """
@@ -120,14 +120,12 @@ async def execute_telnet_async(node_info, log_file_path):
             initial_output = await read_until_prompt(reader)
             log_file.write(initial_output)
             log_file.flush()
-            print(f"\n--- Initial connection to {node_info['nodename']} ---\n{initial_output}\n-------------------------------------")
 
             if node_info.get('additional_command_1'):
                 cmd = node_info['additional_command_1']
                 writer.write(cmd.encode('ascii') + b'\r\n')
                 await writer.drain()
                 response = await read_until_prompt(reader)
-                print(f"\n--- Output from {node_info['nodename']} after '{cmd}' ---\n{response}\n-------------------------------------")
                 log_file.write(response)
                 log_file.flush()
                 
@@ -136,7 +134,6 @@ async def execute_telnet_async(node_info, log_file_path):
                     writer.write(cmd2.encode('ascii') + b'\r\n')
                     await writer.drain()
                     response2 = await read_until_prompt(reader)
-                    print(f"\n--- Output from {node_info['nodename']} after '{cmd2}' ---\n{response2}\n-------------------------------------")
                     log_file.write(response2)
                     log_file.flush()
 
@@ -144,7 +141,6 @@ async def execute_telnet_async(node_info, log_file_path):
                 writer.write(cmd.encode('ascii') + b'\r\n')
                 await writer.drain()
                 response = await read_until_prompt(reader)
-                print(f"\n--- Output from {node_info['nodename']} after '{cmd}' ---\n{response}\n-------------------------------------")
                 log_file.write(response)
                 log_file.flush()
 
@@ -186,13 +182,11 @@ async def execute_ssh_async(node_info, log_file_path):
                     initial_output = await read_until_prompt(process.stdout)
                     log_file.write(initial_output)
                     log_file.flush()
-                    print(f"\n--- Initial connection to {node_info['nodename']} ---\n{initial_output}\n-------------------------------------")
 
                     if node_info.get('additional_command_1'):
                         cmd = node_info['additional_command_1']
                         process.stdin.write((cmd + '\n').encode('utf-8'))
                         response = await read_until_prompt(process.stdout)
-                        print(f"\n--- Output from {node_info['nodename']} after '{cmd}' ---\n{response}\n-------------------------------------")
                         log_file.write(response)
                         log_file.flush()
 
@@ -200,14 +194,12 @@ async def execute_ssh_async(node_info, log_file_path):
                             cmd2 = node_info['additional_command_2']
                             process.stdin.write((cmd2 + '\n').encode('utf-8'))
                             response2 = await read_until_prompt(process.stdout)
-                            print(f"\n--- Output from {node_info['nodename']} after '{cmd2}' ---\n{response2}\n-------------------------------------")
                             log_file.write(response2)
                             log_file.flush()
 
                     for cmd in node_info['commands']:
                         process.stdin.write((cmd + '\n').encode('utf-8'))
                         response = await read_until_prompt(process.stdout)
-                        print(f"\n--- Output from {node_info['nodename']} after '{cmd}' ---\n{response}\n-------------------------------------")
                         log_file.write(response)
                         log_file.flush()
                     
