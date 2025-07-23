@@ -90,16 +90,21 @@ async def execute_telnet_async(node_info, log_file_path):
             buffer = b""
             prompt_found = False
             log_file.write("--- Waiting for password prompt ---\n")
-            for _ in range(10):
+            # Increased loop range for a total timeout of 15 seconds (30 * 0.5s)
+            for _ in range(30):
                 try:
                     chunk = await asyncio.wait_for(reader.read(100), timeout=0.5)
                     if not chunk:
-                        raise ConnectionError("Telnet connection closed while waiting for password prompt.")
-                    buffer += chunk
-                    if b'password:' in buffer.lower():
+                        # If connection closes, stop trying
+                        break
+                    buffer += chunk.replace(b'\x00', b'') # Clean null bytes
+                    
+                    # More robust check: decode with error handling, then check lowercased string.
+                    if 'password:' in buffer.decode('utf-8', errors='ignore').lower():
                         prompt_found = True
                         break
                 except asyncio.TimeoutError:
+                    # No data received in this interval, continue waiting
                     pass
 
             log_file.write(f"Received: {buffer.decode(errors='ignore')}\n")
@@ -159,6 +164,7 @@ async def execute_telnet_async(node_info, log_file_path):
             log_file.write(error_message)
             log_file.flush()
             return None
+
 
 async def execute_ssh_async(node_info, log_file_path):
     """
