@@ -111,28 +111,58 @@ async def execute_telnet_async(node_info, log_file_path):
                 timeout=10
             )
 
-            buffer = b""
-            prompt_found = False
-            for _ in range(20):
+            # --- Basic Telnet Negotiation ---
+            IAC, DONT, DO, WONT, WILL = b'\xff', b'\xfe', b'\xfd', b'\xfc', b'\xfb'
+            buffer = b''
+            negotiation_attempts = 0
+            while negotiation_attempts < 10:
                 try:
-                    chunk = await asyncio.wait_for(reader.read(100), timeout=0.5)
-                    if not chunk:
-                        raise ConnectionError("Telnet connection closed while waiting for login prompt.")
-                    buffer += chunk
+                    data = await asyncio.wait_for(reader.read(1024), timeout=0.5)
+                    if not data:
+                        break
+                    
+                    response = b''
+                    i = 0
+                    clean_chunk = b''
+                    while i < len(data):
+                        if data[i:i+1] == IAC:
+                            command = data[i+1:i+2]
+                            option = data[i+2:i+3]
+                            if command == WILL:
+                                response += IAC + DONT + option
+                            elif command == DO:
+                                response += IAC + WONT + option
+                            i += 3
+                        else:
+                            clean_chunk += data[i:i+1]
+                            i += 1
+                    
+                    if response:
+                        writer.write(response)
+                        await writer.drain()
+                    
+                    buffer += clean_chunk
                     if any(p in buffer.lower() for p in [b'username:', b'login:']):
-                        prompt_found = True
                         break
                 except asyncio.TimeoutError:
-                    pass
-            
-            if not prompt_found:
+                    break
+                finally:
+                    negotiation_attempts += 1
+
+            log_file.write(f"Received: {buffer.decode(errors='ignore')}\n")
+            log_file.flush()
+            if not any(p in buffer.lower() for p in [b'username:', b'login:']):
                 raise asyncio.TimeoutError(f"Timeout waiting for username/login prompt. Received: {buffer.decode(errors='ignore')}")
 
-            writer.write(node_info['login_id'].encode('ascii') + b"\n")
+            log_file.write(f"--- Sending login ID: {node_info['login_id']} ---\n")
+            log_file.flush()
+            writer.write(node_info['login_id'].encode('ascii') + b"\r\n")
             await writer.drain()
 
+            # Password prompt detection
             buffer = b""
             prompt_found = False
+            log_file.write("--- Waiting for password prompt ---\n")
             for _ in range(10):
                 try:
                     chunk = await asyncio.wait_for(reader.read(100), timeout=0.5)
@@ -145,10 +175,14 @@ async def execute_telnet_async(node_info, log_file_path):
                 except asyncio.TimeoutError:
                     pass
 
+            log_file.write(f"Received: {buffer.decode(errors='ignore')}\n")
+            log_file.flush()
             if not prompt_found:
                 raise asyncio.TimeoutError(f"Timeout waiting for password prompt. Received: {buffer.decode(errors='ignore')}")
 
-            writer.write(node_info['login_password'].encode('ascii') + b"\n")
+            log_file.write("--- Sending password ---\n")
+            log_file.flush()
+            writer.write(node_info['login_password'].encode('ascii') + b"\r\n")
             await writer.drain()
 
             initial_output = await read_until_prompt(reader)
@@ -158,7 +192,7 @@ async def execute_telnet_async(node_info, log_file_path):
 
             if node_info.get('additional_command_1'):
                 cmd = node_info['additional_command_1']
-                writer.write(cmd.encode('ascii') + b'\n')
+                writer.write(cmd.encode('ascii') + b'\r\n')
                 await writer.drain()
                 response = await read_until_prompt(reader)
                 print(f"\n--- Output from {node_info['nodename']} after '{cmd}' ---\n{response}\n-------------------------------------")
@@ -167,7 +201,7 @@ async def execute_telnet_async(node_info, log_file_path):
                 
                 if node_info.get('additional_command_2') and ":" in response:
                     cmd2 = node_info['additional_command_2']
-                    writer.write(cmd2.encode('ascii') + b'\n')
+                    writer.write(cmd2.encode('ascii') + b'\r\n')
                     await writer.drain()
                     response2 = await read_until_prompt(reader)
                     print(f"\n--- Output from {node_info['nodename']} after '{cmd2}' ---\n{response2}\n-------------------------------------")
@@ -175,17 +209,20 @@ async def execute_telnet_async(node_info, log_file_path):
                     log_file.flush()
 
             for cmd in node_info['commands']:
-                writer.write(cmd.encode('ascii') + b'\n')
+                writer.write(cmd.encode('ascii') + b'\r\n')
                 await writer.drain()
                 response = await read_until_prompt(reader)
                 print(f"\n--- Output from {node_info['nodename']} after '{cmd}' ---\n{response}\n-------------------------------------")
                 log_file.write(response)
                 log_file.flush()
 
-            writer.write(b"exit\n")
+            writer.write(b"exit\r\n")
             await writer.drain()
             writer.close()
-            await writer.wait_closed()
+            try:
+                await writer.wait_closed()
+            except AttributeError:
+                pass # For Python < 3.7 compatibility
             log_file.write("\n--- Disconnected ---")
             log_file.flush()
             return log_file_path
@@ -194,7 +231,8 @@ async def execute_telnet_async(node_info, log_file_path):
             error_message = f"\n*** ERROR: Failed to connect or execute commands on {node_info['nodename']}. Reason: {e} ***\n"
             log_file.write(error_message)
             log_file.flush()
-            return None
+            return None}
+
 
 async def execute_ssh_async(node_info, log_file_path):
     """

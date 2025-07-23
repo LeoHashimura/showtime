@@ -1,77 +1,12 @@
 import asyncio
-import csv
-import os
 import re
-import sys
-import zipfile
-from datetime import datetime
-from itertools import zip_longest
 import asyncssh
-
-
-def print_progress_bar(iteration, total, prefix='Progress:', suffix='Complete', length=50, fill='█'):
-    percent = ("{0:.1f}").format(100 * (iteration / float(total)))
-    filled_length = int(length * iteration // total)
-    bar = fill * filled_length + '-' * (length - filled_length)
-    sys.stdout.write(f'\r{prefix} |{bar}| {percent}% {suffix}')
-    sys.stdout.flush()
-    if iteration == total:
-        print()
-
-def parse_nodes_from_csv(file_path):
-    """
-    Parses the CSV file where each column represents a node.
-    Any row after the initial config is treated as a command.
-    Stops reading commands for a node when a blank cell is found.
-    """
-    nodes = []
-    config_headers = {
-        'nodename', 'protocol', 'ip_address', 'login_id', 
-        'login_password', 'additional_command_1', 'additional_command_2'
-    }
-
-    try:
-        with open(file_path, 'r', newline='', encoding='utf-8-sig') as csvfile:
-            reader = list(csv.reader(csvfile))
-            if not reader:
-                return []
-            
-            transposed_data = list(zip_longest(*reader, fillvalue=''))
-            headers = [h.strip() for h in transposed_data[0]]
-
-            for i in range(1, len(transposed_data)):
-                node_info = {"commands": []}
-                node_column = transposed_data[i]
-                commands_ended = False
-
-                for j, header in enumerate(headers):
-                    value = node_column[j].strip() if j < len(node_column) else ""
-
-                    if header not in config_headers:
-                        if not value:
-                            commands_ended = True
-                        
-                        if not commands_ended:
-                            node_info["commands"].append(value)
-                    else:
-                        node_info[header] = value
-                
-                nodes.append(node_info)
-
-    except FileNotFoundError:
-        print(f"Error: The file {file_path} was not found.")
-        return None
-    except Exception as e:
-        print(f"An error occurred while parsing the CSV: {e}")
-        return None
-    return nodes
 
 PROMPT_RE = re.compile(b'\S+[>#:$]\s*$')
 
 async def read_until_prompt(stream, timeout=20):
     """
     Reads from a stream until a prompt is detected or a timeout occurs.
-    The stream can be an asyncio.StreamReader or an asyncssh.SSHClientProcess's stdout.
     """
     full_output = b""
     try:
@@ -90,8 +25,8 @@ async def read_until_prompt(stream, timeout=20):
 
 async def execute_telnet_async(node_info, log_file_path):
     """
-    Connects to a node using Telnet, waits for prompts, executes commands,
-    and writes output to a log file in real-time.
+    Connects to a node using Telnet, handles negotiation, executes commands,
+    and writes output to a log file.
     """
     with open(log_file_path, 'w', encoding='utf-8') as log_file:
         try:
@@ -225,11 +160,10 @@ async def execute_telnet_async(node_info, log_file_path):
             log_file.flush()
             return None
 
-
 async def execute_ssh_async(node_info, log_file_path):
     """
-    Connects to a node using asyncssh, waits for prompts, executes commands,
-    and writes output to a log file in real-time.
+    Connects to a node using asyncssh, executes commands,
+    and writes output to a log file.
     """
     with open(log_file_path, 'w', encoding='utf-8') as log_file:
         try:
@@ -283,114 +217,3 @@ async def execute_ssh_async(node_info, log_file_path):
             log_file.write(error_message)
             log_file.flush()
             return None
-
-def create_zip_file(files_to_zip, zip_filename):
-    """
-    Creates a zip archive containing the specified files.
-    """
-    try:
-        with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zf:
-            for file in files_to_zip:
-                zf.write(file, os.path.basename(file))
-        print(f"\nSuccessfully created zip file: {zip_filename}")
-    except Exception as e:
-        print(f"\nError: Failed to create zip file. Reason: {e}")
-
-async def main():
-    """
-    Main asynchronous function to orchestrate the process.
-    """
-    BASE_NODE_TIMEOUT = 30.0
-    SECONDS_PER_COMMAND = 5.0
-
-    if len(sys.argv) > 1:
-        if sys.argv[1] in ('-h', '--help'):
-            print(f"Usage: python rtrun.py [path_to_your_csv_file]")
-            print(f"Base node timeout is {BASE_NODE_TIMEOUT} seconds, plus {SECONDS_PER_COMMAND} seconds per command.")
-            return
-        csv_file = sys.argv[1]
-        print(f"Using specified CSV file: {csv_file}")
-    else:
-        csv_file = 'nodes.csv'
-        print(f"No CSV file specified, defaulting to '{csv_file}'")
-
-    nodes = parse_nodes_from_csv(csv_file)
-
-    if nodes is None:
-        print("Halting script due to CSV parsing errors.")
-        return
-    if not nodes:
-        print(f"No nodes found in the CSV file '{csv_file}'. Please create it.")
-        return
-
-    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
-    output_dir = f"output_{timestamp}"
-    os.makedirs(output_dir, exist_ok=True)
-    print(f"Created output directory: {output_dir}")
-
-    tasks = []
-    for node in nodes:
-        protocol = node.get('protocol', 'ssh').lower()
-        task = None
-        log_file_path = os.path.join(output_dir, f"{node['nodename']}_{timestamp}.txt")
-
-        if protocol == 'ssh':
-            task = execute_ssh_async(node, log_file_path)
-        elif protocol == 'telnet':
-            task = execute_telnet_async(node, log_file_path)
-        else:
-            print(f"*** SKIPPING: Unknown protocol '{protocol}' for node {node['nodename']} ***")
-        
-        if task:
-            num_commands = len(node.get('commands', []))
-            if node.get('additional_command_1'):
-                num_commands += 1
-            if node.get('additional_command_2'):
-                num_commands += 1
-            
-            node_timeout = BASE_NODE_TIMEOUT + (num_commands * SECONDS_PER_COMMAND)
-            print(f"Setting timeout for {node['nodename']} to {node_timeout} seconds ({num_commands} commands).")
-            tasks.append(asyncio.wait_for(task, timeout=node_timeout))
-
-    total_tasks = len(tasks)
-    print(f"Processing {total_tasks} nodes...")
-    print_progress_bar(0, total_tasks)
-
-    successful_log_files = []
-    completed_tasks = 0
-    for f in asyncio.as_completed(tasks):
-        try:
-            log_file_path_result = await f
-            if log_file_path_result:
-                successful_log_files.append(log_file_path_result)
-        except asyncio.TimeoutError:
-            print(f"\nWarning: A node task timed out and was skipped.")
-        except Exception as e:
-            print(f"\nAn error occurred in a task: {e}")
-        finally:
-            completed_tasks += 1
-            print_progress_bar(completed_tasks, total_tasks)
-
-    print(f"\nAll {completed_tasks} node operations attempted.")
-
-    if successful_log_files:
-        zip_filename = f"command_output_{timestamp}.zip"
-        print(f"Zipping {len(successful_log_files)} successful log files...")
-        create_zip_file(successful_log_files, zip_filename)
-    else:
-        print("No log files were successfully generated to zip.")
-
-    print("\n=====================================================")
-    print("Script finished. All operations are complete.")
-    print("=====================================================")
-
-
-if __name__ == "__main__":
-    if os.name == 'nt':
-        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
-    
-    loop = asyncio.get_event_loop()
-    try:
-        loop.run_until_complete(main())
-    finally:
-        loop.close()
