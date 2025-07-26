@@ -3,9 +3,6 @@ import csv
 from itertools import zip_longest
 
 def parse_nodes_from_csv(file_path):
-    """
-    Parses the CSV file where each column represents a node.
-    """
     nodes = []
     config_headers = {
         'nodename', 'protocol', 'ip_address', 'login_id', 
@@ -50,9 +47,6 @@ def parse_nodes_from_csv(file_path):
     return nodes
 
 def parse_nodes_from_excel(file_path, sheet_name=1):
-    """
-    Parses the Excel file where each column after the first represents a node.
-    """
     nodes = []
     config_headers = {
         'nodename', 'protocol', 'ip_address', 'login_id',

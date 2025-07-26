@@ -2,12 +2,9 @@ import asyncio
 import re
 import asyncssh
 
-PROMPT_RE = re.compile(b'\S+[>#:$]\s*$')
+PROMPT_RE = re.compile(b'\S+[>#$]\s*$')
 
 async def read_until_prompt(stream, timeout=40):
-    """
-    Reads from a stream until a prompt is detected or a timeout occurs.
-    """
     full_output = b""
     try:
         while True:
@@ -19,15 +16,11 @@ async def read_until_prompt(stream, timeout=40):
             if non_empty_lines and PROMPT_RE.search(non_empty_lines[-1]):
                 break
     except asyncio.TimeoutError:
-        full_output += b"\n*** TIMEOUT: Waited too long for a prompt. ***\n"
+        full_output += b"\n*** TIMEOUT ***\n"
     
     return full_output.decode('utf-8', errors='ignore')
 
 async def execute_telnet_async(node_info, log_file_path):
-    """
-    Connects to a node using Telnet, handles negotiation, executes commands,
-    and writes output to a log file.
-    """
     with open(log_file_path, 'w', encoding='utf-8') as log_file:
         try:
             log_file.write(f"--- Connecting to {node_info['nodename']} ({node_info['ip_address']}) via Telnet ---\n")
@@ -151,22 +144,18 @@ async def execute_telnet_async(node_info, log_file_path):
                 await writer.wait_closed()
             except AttributeError:
                 pass # For Python < 3.7 compatibility
-            log_file.write("\n--- Disconnected ---")
+            #log_file.write("\n--- Disconnected ---")
             log_file.flush()
             return log_file_path
 
         except Exception as e:
             error_message = f"\n*** ERROR: Failed to connect or execute commands on {node_info['nodename']}. Reason: {e} ***\n"
-            log_file.write(error_message)
+            #log_file.write(error_message)
             log_file.flush()
             return None
 
 
 async def execute_ssh_async(node_info, log_file_path):
-    """
-    Connects to a node using asyncssh, executes commands,
-    and writes output to a log file.
-    """
     with open(log_file_path, 'w', encoding='utf-8') as log_file:
         try:
             log_file.write(f"--- Connecting to {node_info['nodename']} ({node_info['ip_address']}) via SSH ---\n")
@@ -206,12 +195,12 @@ async def execute_ssh_async(node_info, log_file_path):
                     process.stdin.write(b'exit\n')
                     await process.wait()
 
-            log_file.write("\n--- Disconnected ---")
+            #log_file.write("\n--- Disconnected ---")
             log_file.flush()
             return log_file_path
 
         except Exception as e:
             error_message = f"\n*** ERROR: Failed to connect or execute commands on {node_info['nodename']}. Reason: {e} ***\n"
-            log_file.write(error_message)
+            #log_file.write(error_message)
             log_file.flush()
             return None
