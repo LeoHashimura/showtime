@@ -41,6 +41,7 @@ class ProgressDisplay:
         self.total_nodes = len(self.all_node_names)
         self.display_limit = 20
         self.displayed_nodes = []
+        self.shimmer_state = 0
 
         if nodes_with_timeouts:
             sorted_by_timeout = sorted(nodes_with_timeouts, key=lambda x: x[1])
@@ -106,11 +107,12 @@ class ProgressDisplay:
         self.displayed_nodes = new_displayed_nodes[:self.display_limit]
 
     async def update(self):
+        self.shimmer_state = (self.shimmer_state + 1) % 4 # Cycle through 4 states for shimmer
+        
+        # Process all pending status updates from the queue
         while not self.status_queue.empty():
             update_info = await self.status_queue.get()
-            node_name = update_info['node']
-            status = update_info['status']
-            self.node_statuses[node_name] = status
+            self.node_statuses[update_info['node']] = update_info['status']
 
         self._update_displayed_nodes()
 
@@ -123,29 +125,29 @@ class ProgressDisplay:
         progress_bar_str = f'|{bar}| {percent}% Complete'
 
         node_status_bar = ""
+        shimmer_chars = ['▓', '▒', '░', '▒'] # Characters for the shimmer effect
         for node_name in self.displayed_nodes:
             status = self.node_statuses.get(node_name, 'pending')
             char = '█'
             color = COLOR_RESET
             if status == 'connecting' or status == 'authenticating':
-                char = '█'; color = COLOR_YELLOW
+                char = '█'
+                color = COLOR_YELLOW
             elif status == 'executing_commands':
-                char = '█'; color = COLOR_GREEN + COLOR_FLASH
+                char = shimmer_chars[self.shimmer_state]
+                color = COLOR_GREEN
             elif status == 'success':
-                char = '█'; color = COLOR_GREEN
+                char = '█'
+                color = COLOR_GREEN
             elif status == 'error':
-                char = '█'; color = COLOR_RED
+                char = '█'
+                color = COLOR_RED
             elif status == 'timeout':
-                char = 'X'; color = COLOR_RED
+                char = 'X'
+                color = COLOR_RED
             node_status_bar += f"{color}{char}{COLOR_RESET}"
         
         line1_str = f"{progress_bar_str} {node_status_bar}"
-        terminal_width = 120
-        # A simple way to handle length of string with color codes
-        line1_str_no_color = f"{progress_bar_str} {''.join(['X' for _ in self.displayed_nodes])}"
-        if len(line1_str_no_color) > terminal_width:
-            line1_str = (line1_str[:terminal_width-3] + '...')
-
         sys.stdout.write(line1_str + '\n')
 
         sys.stdout.write(CLEAR_LINE)
@@ -176,6 +178,7 @@ async def main():
 
     input_file = sys.argv[1]
     nodes = None
+    sheet_identifier = None # Initialize sheet_identifier
     if input_file.lower().endswith('.csv'):
         nodes = parse_nodes_from_csv(input_file)
     elif input_file.lower().endswith(('.xlsx', '.xls')):
@@ -197,61 +200,61 @@ async def main():
         print(f"'{input_file}'の中にノードの指定が見つかりませんでした.")
         return
 
+    if input_file.lower().endswith(('.xlsx', '.xls')):
+        print(f"--- Processing sheet '{sheet_identifier}' from {os.path.basename(input_file)} ---")
+    else:
+        print(f"--- Processing file: {os.path.basename(input_file)} ---")
+
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = f"output_{timestamp}"
     if os.path.dirname(input_file):
         output_dir = os.path.join(os.path.dirname(input_file), output_dir)
     os.makedirs(output_dir, exist_ok=True)
 
-    tasks = []
-    nodes_with_timeouts = []
     status_queue = asyncio.Queue()
-    results_queue = asyncio.Queue() # To store results and node names
+    results_queue = asyncio.Queue()
+    nodes_with_timeouts = []
 
     for node in nodes:
         num_commands = len(node.get('commands', [])) + len([k for k in node if k.startswith('additional_command')])
         node_timeout = BASE_NODE_TIMEOUT + (num_commands * SECONDS_PER_COMMAND)
         nodes_with_timeouts.append((node['nodename'], node_timeout))
 
-        protocol = node.get('protocol', 'ssh').lower()
+    display = ProgressDisplay(nodes, status_queue, nodes_with_timeouts)
+
+    async def run_node_task(node):
+        node_timeout = next((t for n, t in nodes_with_timeouts if n == node['nodename']), BASE_NODE_TIMEOUT)
         log_file_path = os.path.join(output_dir, f"{node['nodename']}_{timestamp}.txt")
-        
+        protocol = node.get('protocol', 'ssh').lower()
         task = None
         if protocol == 'ssh':
             task = execute_ssh_async(node, log_file_path, status_queue)
         elif protocol == 'telnet':
             task = execute_telnet_async(node, log_file_path, status_queue)
         else:
-            print(f"*** SKIPPING: Unknown protocol '{protocol}' for node {node['nodename']} ***")
-            continue
+            await status_queue.put({'node': node['nodename'], 'status': 'error', 'message': f'Unknown protocol: {protocol}'})
+            return node['nodename'], None, f"Unknown protocol: {protocol}"
+        
+        try:
+            result = await asyncio.wait_for(task, timeout=node_timeout)
+            return node['nodename'], result, None
+        except asyncio.TimeoutError:
+            return node['nodename'], None, "TimeoutError"
+        except Exception as e:
+            return node['nodename'], None, str(e)
 
-        # Create a task (Future) from the coroutine returned by asyncio.wait_for
-        future = asyncio.ensure_future(asyncio.wait_for(task, timeout=node_timeout))
-        tasks.append(future)
+    async def display_updater(d):
+        while d.completed_count < d.total_nodes:
+            await d.update()
+            await asyncio.sleep(0.2) # Refresh rate
 
-        # Add a done callback to store the result and node name
-        def done_callback(fut, node_name=node['nodename']):
-            try:
-                result = fut.result()
-                results_queue.put_nowait((node_name, result, None)) # (node_name, result, error)
-            except asyncio.TimeoutError:
-                results_queue.put_nowait((node_name, None, "TimeoutError"))
-            except Exception as e:
-                results_queue.put_nowait((node_name, None, str(e)))
-
-        future.add_done_callback(done_callback)
-
-    if not tasks:
-        print("No valid tasks to run.")
-        return
-
-    display = ProgressDisplay(nodes, status_queue, nodes_with_timeouts)
+    tasks = [run_node_task(node) for node in nodes]
+    updater_task = asyncio.create_task(display_updater(display))
 
     successful_log_files = []
-    
-    for _ in range(len(tasks)):
-        node_name, result, error = await results_queue.get()
-        display.completed_count += 1 # Update completed count for progress bar
+    for future in asyncio.as_completed(tasks):
+        node_name, result, error = await future
+        display.completed_count += 1
 
         if error == "TimeoutError":
             display.node_statuses[node_name] = 'timeout'
@@ -260,11 +263,18 @@ async def main():
         else:
             if result:
                 successful_log_files.append(result)
-            display.node_statuses[node_name] = 'success' # Ensure final status is success
-        
-        await display.update() # Update the display after processing each result
+            display.node_statuses[node_name] = 'success'
+    
+    updater_task.cancel()
+    try:
+        await updater_task # Allow updater to finish final render
+    except asyncio.CancelledError:
+        pass
+    await display.update() # One final update to show 100%
 
-    print(f"\n全 {len(tasks)} のノードの取得が完了しました。")
+    # Move cursor below the display area before printing final message
+    sys.stdout.write('\n\n') 
+    print(f"全 {len(tasks)} のノードの取得が完了しました。")
 
     if successful_log_files:
         zip_filename = f"command_output_{timestamp}.zip"
