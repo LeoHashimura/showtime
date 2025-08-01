@@ -40,6 +40,7 @@ class ProgressDisplay:
         self.completed_count = 0
         self.total_nodes = len(self.all_node_names)
         self.shimmer_state = 0
+        self.has_printed_once = False
 
         if nodes_with_timeouts:
             sorted_by_timeout = sorted(nodes_with_timeouts, key=lambda x: x[1])
@@ -48,10 +49,6 @@ class ProgressDisplay:
         else:
             self.shortest_node = "N/A"
             self.longest_node = "N/A"
-
-        # Print two blank lines to reserve space, but do not move cursor yet.
-        sys.stdout.write('\n\n')
-        sys.stdout.flush()
 
     def get_status_line_text(self):
         timed_out_nodes = [name for name, status in self.node_statuses.items() if status == 'timeout']
@@ -81,15 +78,20 @@ class ProgressDisplay:
             return f"{prefix}{nodes_str}"
 
     async def update(self):
+        if not self.has_printed_once:
+            # Reserve two lines on the first run only
+            sys.stdout.write('\n\n')
+            self.has_printed_once = True
+
         self.shimmer_state = (self.shimmer_state + 1) % 4
         
         while not self.status_queue.empty():
             update_info = await self.status_queue.get()
             self.node_statuses[update_info['node']] = update_info['status']
 
-        # --- Prepare Line 1: Percentage and Node Status Bar ---
+        # --- Prepare Line 1: Node Status Bar and Percentage ---
         percent = ("{0:.1f}").format(100 * (self.completed_count / float(self.total_nodes))) if self.total_nodes > 0 else "0.0"
-        percent_str = f"{percent}% "
+        percent_str = f" {percent}%"
 
         node_status_bar = ""
         shimmer_chars = ['▓', '▒', '░', '▒']
@@ -101,8 +103,6 @@ class ProgressDisplay:
                 char = '█'
                 color = COLOR_YELLOW
             elif status == 'executing_commands':
-                # Use a hash of the node name to create a stable but unique offset
-                # This ensures each node twinkles independently
                 offset = hash(node_name) % 4
                 char = shimmer_chars[(self.shimmer_state + offset) % 4]
                 color = COLOR_GREEN
@@ -117,13 +117,13 @@ class ProgressDisplay:
                 color = COLOR_RED
             node_status_bar += f"{color}{char}{COLOR_RESET}"
         
-        line1_str = f"{percent_str}{node_status_bar}"
+        line1_str = f"{node_status_bar}{percent_str}"
         
         # --- Prepare Line 2: Status Text ---
         line2_str = self.get_status_line_text()
 
-        # --- Cursors and Printing (The fix for the 3rd line bug is here) ---
-        sys.stdout.write(f'{CURSOR_UP}{CURSOR_UP}') # Move to start of the reserved space
+        # --- Cursors and Printing (Robust method) ---
+        sys.stdout.write(f'{CURSOR_UP}{CURSOR_UP}')
         sys.stdout.write(CLEAR_LINE)
         sys.stdout.write(line1_str + '\n')
         sys.stdout.write(CLEAR_LINE)

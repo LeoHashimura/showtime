@@ -1,4 +1,4 @@
-import pandas as pd
+import openpyxl
 import csv
 from itertools import zip_longest
 
@@ -54,20 +54,34 @@ def parse_nodes_from_excel(file_path, sheet_name=1):
     }
 
     try:
-        df = pd.read_excel(file_path, sheet_name=sheet_name, header=None, keep_default_na=False)
+        workbook = openpyxl.load_workbook(file_path, data_only=True)
+        
+        if isinstance(sheet_name, int):
+            # openpyxl is 0-indexed, but user provides 1-indexed
+            if 1 <= sheet_name <= len(workbook.sheetnames):
+                sheet = workbook.worksheets[sheet_name - 1]
+            else:
+                raise ValueError(f"Sheet index {sheet_name} is out of range.")
+        else:
+            sheet = workbook[sheet_name]
 
-        if df.empty:
+        # Transpose the data: convert columns to rows
+        transposed_data = []
+        for col in sheet.iter_cols():
+            transposed_data.append([cell.value if cell.value is not None else "" for cell in col])
+
+        if not transposed_data:
             return []
 
-        headers = [str(h).strip() for h in df.iloc[:, 0]]
+        headers = [str(h).strip() for h in transposed_data[0]]
 
-        for i in range(1, df.shape[1]):
+        for i in range(1, len(transposed_data)):
             node_info = {"commands": []}
-            node_column = df.iloc[:, i]
+            node_column = transposed_data[i]
             commands_ended = False
 
             for j, header in enumerate(headers):
-                value = str(node_column.iloc[j]).strip() if j < len(node_column) else ""
+                value = str(node_column[j]).strip() if j < len(node_column) else ""
 
                 if header not in config_headers:
                     if not value:
