@@ -7,6 +7,10 @@ import time
 from config_parsers import parse_nodes_from_csv, parse_nodes_from_excel
 from network_operations import execute_ssh_async, execute_telnet_async
 
+# ANSI escape codes for cursor control
+CURSOR_UP = '\x1b[1A'
+CLEAR_LINE = '\x1b[2K'
+
 def get_pdkey():
     kf, ma = '.pdkey', 5 * 24 * 60 * 60
     if os.path.exists(kf) and time.time() - os.path.getmtime(kf) < ma:
@@ -21,14 +25,47 @@ def get_pdkey():
                     f.write(k)
                 return k
 
-def print_progress_bar(iteration, total, prefix='Progress:', suffix='Complete', length=50, fill='█'):
-    percent = ("{0:.1f}").format(100 * (iteration / float(total)))
-    filled_length = int(length * iteration // total)
-    bar = fill * filled_length + '-' * (length - filled_length)
-    sys.stdout.write(f'\r{prefix} |{bar}| {percent}% {suffix}')
-    sys.stdout.flush()
-    if iteration == total:
+class ProgressDisplay:
+    def __init__(self, total, nodes_with_timeouts):
+        self.total = total
+        self.completed = 0
+        self.error_message = None
+        self.nodes_with_timeouts = nodes_with_timeouts
+        self.shortest_node = min(nodes_with_timeouts, key=lambda x: x[1])
+        self.longest_node = max(nodes_with_timeouts, key=lambda x: x[1])
+        self._print_initial_lines()
+
+    def _print_initial_lines(self):
+        # Print two blank lines to reserve space
         print()
+        print()
+
+    def update(self, completed_increment=0, error_node=None):
+        self.completed += completed_increment
+        if error_node:
+            self.error_message = f"Status: Timeout on {error_node}. Continuing..."
+
+        # Move cursor up two lines to redraw
+        sys.stdout.write(CURSOR_UP)
+        sys.stdout.write(CURSOR_UP)
+
+        # Draw top line (status or min/max timeout info)
+        sys.stdout.write(CLEAR_LINE)
+        if self.error_message:
+            print(self.error_message)
+        else:
+            print(f"Shortest: {self.shortest_node[0]} ({self.shortest_node[1]}s) | Longest: {self.longest_node[0]} ({self.longest_node[1]}s)")
+
+        # Draw bottom line (progress bar)
+        percent = ("{0:.1f}").format(100 * (self.completed / float(self.total)))
+        fill = '█'
+        length = 50
+        filled_length = int(length * self.completed // self.total)
+        bar = fill * filled_length + '-' * (length - filled_length)
+        sys.stdout.write(CLEAR_LINE)
+        print(f'Progress: |{bar}| {percent}% Complete')
+        sys.stdout.flush()
+
 def create_zip_file(files_to_zip, zip_filename):
     try:
         with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zf:
@@ -37,25 +74,20 @@ def create_zip_file(files_to_zip, zip_filename):
         print(f"\nzipに固めましたよ: {zip_filename}")
     except Exception as e:
         print(f"\nError: 次の理由でzip固め損ねました: {e}")
+
 async def main():
     pdkey = get_pdkey()
-    BASE_NODE_TIMEOUT = 30.0 #基本1ノードにつき30秒確保します。
-    SECONDS_PER_COMMAND = 5.0 #各コマンド実行に5秒の余裕を持たせます。
-    PDRIVE = "ls -l" #ここは任意のコマンドを実行するための変数です。あれに変更してください。
-    if len(sys.argv) < 2 or sys.argv[1] in ('-h', '--help'):
+    BASE_NODE_TIMEOUT = 30.0
+    SECONDS_PER_COMMAND = 5.0
+    PDRIVE = "ls -l"
 
+    if len(sys.argv) < 2 or sys.argv[1] in ('-h', '--help'):
         print("Usage: python3 run_automation.py [path_to_input_file] [options]")
-        print("\nArguments:")
-        print("  path_to_input_file: コマンドファイルのファイルパス")
-        print("\nOptions:")
-        print("  --sheet [sheet_index]:エクセルのみ。対象シートを選べます。 デフォは2番目です")
-        print(f"\nTimeout settings:")
-        print(f"  1ノード辺りの基本タイムアウト時間： {BASE_NODE_TIMEOUT} 秒, コマンド1つにつき {SECONDS_PER_COMMAND} 追加します。")
         return
+
     input_file = sys.argv[1]
     nodes = None
     if input_file.lower().endswith('.csv'):
-        print(f"\rCSV file: {input_file}                 _")
         nodes = parse_nodes_from_csv(input_file)
     elif input_file.lower().endswith(('.xlsx', '.xls')):
         sheet_identifier = 1
@@ -67,79 +99,79 @@ async def main():
             except IndexError:
                 print("Error: --sheet の後に対象シートを指定してください")
                 return
-        print(f"\rExcel file: {input_file}, sheet: '{sheet_identifier}'")
         nodes = parse_nodes_from_excel(input_file, sheet_name=sheet_identifier)
     else:
-        print(f"\r {input_file}は対象外です      ")
+        print(f" {input_file}は対象外です")
         return
-    if nodes is None:
-        print("\rファイルの構文エラーがあるかもしれません      ")
-        return
+
     if not nodes:
-        print(f"'{input_file}'の中にノードの指定が見つかりませんでした'{input_file}'.")
+        print(f"'{input_file}'の中にノードの指定が見つかりませんでした.")
         return
 
     timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
     output_dir = f"output_{timestamp}"
-    if os.path.dirname(input_file): #入力ファイルの場所と同じ場所に出力する。この辺り権限で色々エラー怖い
+    if os.path.dirname(input_file):
         output_dir = os.path.join(os.path.dirname(input_file), output_dir)
-    print(f"Output directory: {output_dir}")
-    os.makedirs(output_dir, exist_ok=True) #ないわけないんだけどね、のこしときます
-    #print(f"Created output directory: {output_dir}")
+    os.makedirs(output_dir, exist_ok=True)
 
     tasks = []
-    for node in nodes:
-        protocol = node.get('protocol', 'ssh').lower()
-        task = None
-        log_file_path = os.path.join(output_dir, f"{node['nodename']}_{timestamp}.txt")
+    nodes_with_timeouts = []
+    task_to_node_map = {}
+    status_queue = asyncio.Queue()
 
+    for node in nodes:
+        num_commands = len(node.get('commands', [])) + len([k for k in node if k.startswith('additional_command')])
+        node_timeout = BASE_NODE_TIMEOUT + (num_commands * SECONDS_PER_COMMAND)
+        nodes_with_timeouts.append((node['nodename'], node_timeout))
+
+        protocol = node.get('protocol', 'ssh').lower()
+        log_file_path = os.path.join(output_dir, f"{node['nodename']}_{timestamp}.txt")
+        
+        task = None
         if protocol == 'ssh':
-            task = execute_ssh_async(node, log_file_path)
+            task = execute_ssh_async(node, log_file_path, status_queue)
         elif protocol == 'telnet':
-            task = execute_telnet_async(node, log_file_path)
+            task = execute_telnet_async(node, log_file_path, status_queue)
         else:
             print(f"*** SKIPPING: Unknown protocol '{protocol}' for node {node['nodename']} ***")
-        
-        if task:
-            num_commands = len(node.get('commands', []))
-            if node.get('additional_command_1'):
-                num_commands += 1
-            if node.get('additional_command_2'):
-                num_commands += 1
-            
-            node_timeout = BASE_NODE_TIMEOUT + (num_commands * SECONDS_PER_COMMAND)
-            print(f"Setting timeout for {node['nodename']} to {node_timeout} seconds ({num_commands} commands).")
-            tasks.append(asyncio.wait_for(task, timeout=node_timeout))
+            continue
 
-    total_tasks = len(tasks)
-    print(f"Processing {total_tasks} nodes...")
-    print_progress_bar(0, total_tasks)
+        future = asyncio.wait_for(task, timeout=node_timeout)
+        tasks.append(future)
+        task_to_node_map[future] = node['nodename']
+
+    if not tasks:
+        print("No valid tasks to run.")
+        return
+
+    display = ProgressDisplay(len(tasks), nodes_with_timeouts)
+    display.update()
 
     successful_log_files = []
-    completed_tasks = 0
     for f in asyncio.as_completed(tasks):
+        node_name = task_to_node_map[f]
         try:
             log_file_path_result = await f
             if log_file_path_result:
                 successful_log_files.append(log_file_path_result)
         except asyncio.TimeoutError:
-            print(f"\nタイムアウトでノードをスキップしました")
+            display.update(completed_increment=1, error_node=node_name)
         except Exception as e:
-            print(f"\nエラー: {e}")
-        finally:
-            completed_tasks += 1
-            print_progress_bar(completed_tasks, total_tasks)
+            display.update(completed_increment=1, error_node=f"{node_name} (Error: {e})")
+        else:
+            display.update(completed_increment=1)
 
-    print(f"\n全 {completed_tasks} のノードの取得が完了しました。")
+    print(f"\n全 {len(tasks)} のノードの取得が完了しました。")
 
     if successful_log_files:
         zip_filename = f"command_output_{timestamp}.zip"
         zip_destination = os.path.join(output_dir, zip_filename)
         create_zip_file(successful_log_files, zip_destination)
-        post_command = f"{PDRIVE}{pdkey} {zip_destination}\n" 
+        post_command = f"{PDRIVE}{pdkey} {zip_destination}\n"
         os.system(post_command)
+
 if __name__ == "__main__":
-    os.environ['LANG'] = 'ja_JP.UTF-8'  # 日本語環境を設定 本当は元にもどすべきなんでしょうね
+    os.environ['LANG'] = 'ja_JP.UTF-8'
     loop = asyncio.get_event_loop()
     try:
         loop.run_until_complete(main())

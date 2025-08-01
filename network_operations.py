@@ -4,6 +4,11 @@ import asyncssh
 
 PROMPT_RE = re.compile(b'\S+[>#$]\s*$')
 
+async def _update_status(queue, node_name, status, message=""):
+    """Helper to safely put status updates on the queue."""
+    if queue:
+        await queue.put({'node': node_name, 'status': status, 'message': message})
+
 async def read_until_prompt(stream, timeout=40):
     full_output = b""
     try:
@@ -20,9 +25,11 @@ async def read_until_prompt(stream, timeout=40):
     
     return full_output.decode('utf-8', errors='ignore')
 
-async def execute_telnet_async(node_info, log_file_path):
+async def execute_telnet_async(node_info, log_file_path, status_queue=None):
+    node_name = node_info['nodename']
     with open(log_file_path, 'w', encoding='utf-8') as log_file:
         try:
+            await _update_status(status_queue, node_name, 'connecting')
             log_file.write(f"--- Connecting to {node_info['nodename']} ({node_info['ip_address']}) via Telnet ---\n")
             log_file.flush()
             
@@ -35,6 +42,7 @@ async def execute_telnet_async(node_info, log_file_path):
             IAC, DONT, DO, WONT, WILL = b'\xff', b'\xfe', b'\xfd', b'\xfc', b'\xfb'
             buffer = b''
             negotiation_attempts = 0
+            await _update_status(status_queue, node_name, 'authenticating')
             while negotiation_attempts < 10:
                 try:
                     data = await asyncio.wait_for(reader.read(1024), timeout=0.5)
@@ -79,25 +87,19 @@ async def execute_telnet_async(node_info, log_file_path):
             writer.write(node_info['login_id'].encode('ascii') + b"\r\n")
             await writer.drain()
 
-            # Password prompt detection
             buffer = b""
             prompt_found = False
             log_file.write("--- Waiting for password prompt ---\n")
-            # Increased loop range for a total timeout of 15 seconds (30 * 0.5s)
             for _ in range(30):
                 try:
                     chunk = await asyncio.wait_for(reader.read(100), timeout=0.5)
                     if not chunk:
-                        # If connection closes, stop trying
                         break
-                    buffer += chunk.replace(b'\x00', b'') # Clean null bytes
-                    
-                    # More robust check: decode with error handling, then check lowercased string.
+                    buffer += chunk.replace(b'\x00', b'')
                     if 'password:' in buffer.decode('utf-8', errors='ignore').lower():
                         prompt_found = True
                         break
                 except asyncio.TimeoutError:
-                    # No data received in this interval, continue waiting
                     pass
 
             log_file.write(f"Received: {buffer.decode(errors='ignore')}\n")
@@ -114,6 +116,7 @@ async def execute_telnet_async(node_info, log_file_path):
             log_file.write(initial_output)
             log_file.flush()
 
+            await _update_status(status_queue, node_name, 'executing_commands')
             if node_info.get('additional_command_1'):
                 cmd = node_info['additional_command_1']
                 writer.write(cmd.encode('ascii') + b'\r\n')
@@ -143,21 +146,24 @@ async def execute_telnet_async(node_info, log_file_path):
             try:
                 await writer.wait_closed()
             except AttributeError:
-                pass # For Python < 3.7 compatibility
-            #log_file.write("\n--- Disconnected ---")
-            log_file.flush()
+                pass
+            
+            await _update_status(status_queue, node_name, 'success')
             return log_file_path
 
         except Exception as e:
-            error_message = f"\n*** ERROR: Failed to connect or execute commands on {node_info['nodename']}. Reason: {e} ***\n"
-            #log_file.write(error_message)
+            error_message = f"Failed to connect or execute commands on {node_info['nodename']}. Reason: {e}"
+            await _update_status(status_queue, node_name, 'error', str(e))
+            log_file.write(f"\n*** ERROR: {error_message} ***\n")
             log_file.flush()
             return None
 
 
-async def execute_ssh_async(node_info, log_file_path):
+async def execute_ssh_async(node_info, log_file_path, status_queue=None):
+    node_name = node_info['nodename']
     with open(log_file_path, 'w', encoding='utf-8') as log_file:
         try:
+            await _update_status(status_queue, node_name, 'connecting')
             log_file.write(f"--- Connecting to {node_info['nodename']} ({node_info['ip_address']}) via SSH ---\n")
             log_file.flush()
             
@@ -167,11 +173,13 @@ async def execute_ssh_async(node_info, log_file_path):
                 password=node_info['login_password'],
                 known_hosts=None
             ) as conn:
+                await _update_status(status_queue, node_name, 'authenticating')
                 async with conn.create_process(term_type='vt100', encoding=None) as process:
                     initial_output = await read_until_prompt(process.stdout)
                     log_file.write(initial_output)
                     log_file.flush()
 
+                    await _update_status(status_queue, node_name, 'executing_commands')
                     if node_info.get('additional_command_1'):
                         cmd = node_info['additional_command_1']
                         process.stdin.write((cmd + '\n').encode('utf-8'))
@@ -195,12 +203,12 @@ async def execute_ssh_async(node_info, log_file_path):
                     process.stdin.write(b'exit\n')
                     await process.wait()
 
-            #log_file.write("\n--- Disconnected ---")
-            log_file.flush()
+            await _update_status(status_queue, node_name, 'success')
             return log_file_path
 
         except Exception as e:
-            error_message = f"\n*** ERROR: Failed to connect or execute commands on {node_info['nodename']}. Reason: {e} ***\n"
-            #log_file.write(error_message)
+            error_message = f"Failed to connect or execute commands on {node_info['nodename']}. Reason: {e}"
+            await _update_status(status_queue, node_name, 'error', str(e))
+            log_file.write(f"\n*** ERROR: {error_message} ***\n")
             log_file.flush()
             return None
