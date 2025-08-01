@@ -11,6 +11,13 @@ from network_operations import execute_ssh_async, execute_telnet_async
 CURSOR_UP = '\x1b[1A'
 CLEAR_LINE = '\x1b[2K'
 
+# ANSI escape codes for colors
+COLOR_YELLOW = '\x1b[33m'
+COLOR_GREEN = '\x1b[32m'
+COLOR_RED = '\x1b[31m'
+COLOR_RESET = '\x1b[0m'
+COLOR_FLASH = '\x1b[5m' # For flashing green
+
 def get_pdkey():
     kf, ma = '.pdkey', 5 * 24 * 60 * 60
     if os.path.exists(kf) and time.time() - os.path.getmtime(kf) < ma:
@@ -26,45 +33,98 @@ def get_pdkey():
                 return k
 
 class ProgressDisplay:
-    def __init__(self, total, nodes_with_timeouts):
-        self.total = total
-        self.completed = 0
-        self.error_message = None
-        self.nodes_with_timeouts = nodes_with_timeouts
-        self.shortest_node = min(nodes_with_timeouts, key=lambda x: x[1])
-        self.longest_node = max(nodes_with_timeouts, key=lambda x: x[1])
+    def __init__(self, all_nodes, status_queue):
+        self.all_node_names = [node['nodename'] for node in all_nodes]
+        self.node_statuses = {name: 'pending' for name in self.all_node_names}
+        self.status_queue = status_queue
+        self.completed_count = 0
+        self.total_nodes = len(self.all_node_names)
+        self.display_limit = 20
+        self.displayed_nodes = [] # List of node names currently displayed
         self._print_initial_lines()
 
     def _print_initial_lines(self):
-        # Print two blank lines to reserve space
+        # Print two blank lines to reserve space for progress bar and node statuses
         print()
         print()
 
-    def update(self, completed_increment=0, error_node=None):
-        self.completed += completed_increment
-        if error_node:
-            self.error_message = f"Status: Timeout on {error_node}. Continuing..."
+    async def update(self):
+        # Process all pending status updates from the queue
+        while not self.status_queue.empty():
+            update_info = await self.status_queue.get()
+            node_name = update_info['node']
+            status = update_info['status']
+            self.node_statuses[node_name] = status
+
+        # Determine which nodes to display
+        self._update_displayed_nodes()
 
         # Move cursor up two lines to redraw
         sys.stdout.write(CURSOR_UP)
         sys.stdout.write(CURSOR_UP)
 
-        # Draw top line (status or min/max timeout info)
+        # Draw top line (node statuses)
         sys.stdout.write(CLEAR_LINE)
-        if self.error_message:
-            print(self.error_message)
-        else:
-            print(f"Shortest: {self.shortest_node[0]} ({self.shortest_node[1]}s) | Longest: {self.longest_node[0]} ({self.longest_node[1]}s)")
+        status_line = ""
+        for node_name in self.displayed_nodes:
+            status = self.node_statuses.get(node_name, 'pending')
+            char = '█' # Default for unknown/pending
+            color = COLOR_RESET
 
-        # Draw bottom line (progress bar)
-        percent = ("{0:.1f}").format(100 * (self.completed / float(self.total)))
+            if status == 'connecting' or status == 'authenticating':
+                char = '█' # Yellow block
+                color = COLOR_YELLOW
+            elif status == 'executing_commands':
+                char = '█' # Flashing green
+                color = COLOR_GREEN + COLOR_FLASH
+            elif status == 'success':
+                char = '█' # Solid green
+                color = COLOR_GREEN
+            elif status == 'error':
+                char = '█' # Red
+                color = COLOR_RED
+            elif status == 'timeout':
+                char = 'X'
+                color = COLOR_RED
+
+            status_line += f"{color}{char}{COLOR_RESET}"
+        print(f"Node Status: {status_line}")
+
+        # Draw bottom line (progress bar without "Progress: ")
+        percent = ("{0:.1f}").format(100 * (self.completed_count / float(self.total_nodes)))
         fill = '█'
         length = 50
-        filled_length = int(length * self.completed // self.total)
+        filled_length = int(length * self.completed_count // self.total_nodes)
         bar = fill * filled_length + '-' * (length - filled_length)
         sys.stdout.write(CLEAR_LINE)
-        print(f'Progress: |{bar}| {percent}% Complete')
+        print(f'|{bar}| {percent}% Complete')
         sys.stdout.flush()
+
+    def _update_displayed_nodes(self):
+        # Keep track of currently active nodes
+        active_nodes = [name for name, status in self.node_statuses.items() if status not in ['success', 'error', 'timeout']]
+        
+        # Prioritize nodes that are already being displayed and are still active
+        new_displayed_nodes = [node for node in self.displayed_nodes if node in active_nodes]
+
+        # Fill up the remaining slots with new active nodes
+        for node_name in self.all_node_names:
+            if node_name not in new_displayed_nodes and node_name in active_nodes:
+                if len(new_displayed_nodes) < self.display_limit:
+                    new_displayed_nodes.append(node_name)
+                else:
+                    break # Display limit reached
+
+        # If there are still empty slots, fill with completed nodes (just to show something)
+        if len(new_displayed_nodes) < self.display_limit:
+            completed_nodes = [name for name, status in self.node_statuses.items() if status in ['success', 'error', 'timeout']]
+            for node_name in completed_nodes:
+                if node_name not in new_displayed_nodes and len(new_displayed_nodes) < self.display_limit:
+                    new_displayed_nodes.append(node_name)
+                else:
+                    break
+        
+        self.displayed_nodes = new_displayed_nodes[:self.display_limit]
 
 def create_zip_file(files_to_zip, zip_filename):
     try:
@@ -156,23 +216,24 @@ async def main():
         print("No valid tasks to run.")
         return
 
-    display = ProgressDisplay(len(tasks), nodes_with_timeouts)
-    display.update()
+    display = ProgressDisplay(nodes, status_queue)
 
     successful_log_files = []
-    completed_count = 0
-    while completed_count < len(tasks):
+    
+    for _ in range(len(tasks)):
         node_name, result, error = await results_queue.get()
-        completed_count += 1
+        display.completed_count += 1 # Update completed count for progress bar
 
         if error == "TimeoutError":
-            display.update(completed_increment=1, error_node=node_name)
+            display.node_statuses[node_name] = 'timeout'
         elif error:
-            display.update(completed_increment=1, error_node=f"{node_name} (Error: {error})")
+            display.node_statuses[node_name] = 'error'
         else:
             if result:
                 successful_log_files.append(result)
-            display.update(completed_increment=1)
+            display.node_statuses[node_name] = 'success' # Ensure final status is success
+        
+        await display.update() # Update the display after processing each result
 
     print(f"\n全 {len(tasks)} のノードの取得が完了しました。")
 
