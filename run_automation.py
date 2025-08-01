@@ -136,7 +136,8 @@ async def main():
             print(f"*** SKIPPING: Unknown protocol '{protocol}' for node {node['nodename']} ***")
             continue
 
-        future = asyncio.wait_for(task, timeout=node_timeout)
+        # Create a task (Future) from the coroutine returned by asyncio.wait_for
+        future = asyncio.ensure_future(asyncio.wait_for(task, timeout=node_timeout))
         tasks.append(future)
 
         # Add a done callback to store the result and node name
