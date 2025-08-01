@@ -151,10 +151,9 @@ async def execute_telnet_async(node_info, log_file_path, status_queue=None):
             await _update_status(status_queue, node_name, 'success')
             return log_file_path
 
-        except asyncio.TimeoutError:
-            # Re-raise timeouts so the main loop can handle them specifically
-            raise
         except Exception as e:
+            # If any exception occurs, including timeouts from the parent task,
+            # log it and report a generic error.
             error_message = f"Failed to connect or execute commands on {node_info['nodename']}. Reason: {e}"
             await _update_status(status_queue, node_name, 'error', str(e))
             log_file.write(f"\n*** ERROR: {error_message} ***\n")
@@ -209,10 +208,9 @@ async def execute_ssh_async(node_info, log_file_path, status_queue=None):
             await _update_status(status_queue, node_name, 'success')
             return log_file_path
 
-        except asyncio.TimeoutError:
-            # Re-raise timeouts so the main loop can handle them specifically
-            raise
         except Exception as e:
+            # If any exception occurs, including timeouts from the parent task,
+            # log it and report a generic error.
             error_message = f"Failed to connect or execute commands on {node_info['nodename']}. Reason: {e}"
             await _update_status(status_queue, node_name, 'error', str(e))
             log_file.write(f"\n*** ERROR: {error_message} ***\n")

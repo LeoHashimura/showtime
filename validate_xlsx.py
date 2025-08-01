@@ -35,9 +35,9 @@ def validate_xlsx(file_path):
         print(f"--- Content of sheet: '{sheet_name}' ---")
 
         # Check for merged cells
-        if sheet.merged_cells.ranges:
+        if sheet.merged_cells:
             print("\n[WARNING] Merged cells found! This can cause parsing issues.")
-            for merged_range in sheet.merged_cells.ranges:
+            for merged_range in sheet.merged_cells:
                 print(f"- Merged range: {merged_range}")
             print()
 
