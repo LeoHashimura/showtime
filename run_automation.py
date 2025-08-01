@@ -249,7 +249,7 @@ async def main():
             await asyncio.sleep(0.2) # Refresh rate
 
     tasks = [run_node_task(node) for node in nodes]
-    updater_task = asyncio.create_task(display_updater(display))
+    updater_task = asyncio.ensure_future(display_updater(display))
 
     successful_log_files = []
     for future in asyncio.as_completed(tasks):
