@@ -24,7 +24,7 @@ def create_zip_file(files_to_zip, zip_filename):
 async def main():
     BASE_NODE_TIMEOUT = 30.0 #基本1ノードにつき30秒確保します。
     SECONDS_PER_COMMAND = 5.0 #各コマンド実行に5秒の余裕を持たせます。
-
+    PDRIVE = "ls -l" #ここは任意のコマンドを実行するための変数です。あれに変更してください。
     if len(sys.argv) < 2 or sys.argv[1] in ('-h', '--help'):
         print("Usage: python3 run_automation.py [path_to_input_file] [options]")
         print("\nArguments:")
@@ -37,7 +37,7 @@ async def main():
     input_file = sys.argv[1]
     nodes = None
     if input_file.lower().endswith('.csv'):
-        print(f"CSV file: {input_file}")
+        print(f"\rCSV file: {input_file}                 _")
         nodes = parse_nodes_from_csv(input_file)
     elif input_file.lower().endswith(('.xlsx', '.xls')):
         sheet_identifier = 1
@@ -49,13 +49,13 @@ async def main():
             except IndexError:
                 print("Error: --sheet の後に対象シートを指定してください")
                 return
-        print(f"Excel file: {input_file}, sheet: '{sheet_identifier}'")
+        print(f"\rExcel file: {input_file}, sheet: '{sheet_identifier}'")
         nodes = parse_nodes_from_excel(input_file, sheet_name=sheet_identifier)
     else:
-        print(f" {input_file}は対象外です。")
+        print(f"\r {input_file}は対象外です      ")
         return
     if nodes is None:
-        print("ファイルの構文エラーがあるかもしれません。")
+        print("\rファイルの構文エラーがあるかもしれません      ")
         return
     if not nodes:
         print(f"'{input_file}'の中にノードの指定が見つかりませんでした'{input_file}'.")
@@ -66,7 +66,7 @@ async def main():
     if os.path.dirname(input_file): #入力ファイルの場所と同じ場所に出力する。この辺り権限で色々エラー怖い
         output_dir = os.path.join(os.path.dirname(input_file), output_dir)
     print(f"Output directory: {output_dir}")
-    os.makedirs(output_dir, exist_ok=True)
+    os.makedirs(output_dir, exist_ok=True)　#ないわけないんだけどね、のこしときます
     #print(f"Created output directory: {output_dir}")
 
     tasks = []
@@ -116,8 +116,12 @@ async def main():
 
     if successful_log_files:
         zip_filename = f"command_output_{timestamp}.zip"
-        create_zip_file(successful_log_files, zip_filename)
+        zip_destination = os.path.join(output_dir, zip_filename)
+        create_zip_file(successful_log_files, zip_destination)
+        post_command = f"{PDRIVE}{pdkey} {zip_destination}\n" 
+        os.system(post_command)
 if __name__ == "__main__":
+    os.system("export $LANG="ja_JP.UTF-8"")  # 日本語環境を設定 本当は元にもどすべきなんでしょうね
     loop = asyncio.get_event_loop()
     try:
         loop.run_until_complete(main())
