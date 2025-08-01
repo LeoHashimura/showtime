@@ -116,8 +116,8 @@ async def main():
 
     tasks = []
     nodes_with_timeouts = []
-    task_to_node_map = {}
     status_queue = asyncio.Queue()
+    results_queue = asyncio.Queue() # To store results and node names
 
     for node in nodes:
         num_commands = len(node.get('commands', [])) + len([k for k in node if k.startswith('additional_command')])
@@ -138,7 +138,18 @@ async def main():
 
         future = asyncio.wait_for(task, timeout=node_timeout)
         tasks.append(future)
-        task_to_node_map[future] = node['nodename']
+
+        # Add a done callback to store the result and node name
+        def done_callback(fut, node_name=node['nodename']):
+            try:
+                result = fut.result()
+                results_queue.put_nowait((node_name, result, None)) # (node_name, result, error)
+            except asyncio.TimeoutError:
+                results_queue.put_nowait((node_name, None, "TimeoutError"))
+            except Exception as e:
+                results_queue.put_nowait((node_name, None, str(e)))
+
+        future.add_done_callback(done_callback)
 
     if not tasks:
         print("No valid tasks to run.")
@@ -148,17 +159,18 @@ async def main():
     display.update()
 
     successful_log_files = []
-    for f in asyncio.as_completed(tasks):
-        node_name = task_to_node_map[f]
-        try:
-            log_file_path_result = await f
-            if log_file_path_result:
-                successful_log_files.append(log_file_path_result)
-        except asyncio.TimeoutError:
+    completed_count = 0
+    while completed_count < len(tasks):
+        node_name, result, error = await results_queue.get()
+        completed_count += 1
+
+        if error == "TimeoutError":
             display.update(completed_increment=1, error_node=node_name)
-        except Exception as e:
-            display.update(completed_increment=1, error_node=f"{node_name} (Error: {e})")
+        elif error:
+            display.update(completed_increment=1, error_node=f"{node_name} (Error: {error})")
         else:
+            if result:
+                successful_log_files.append(result)
             display.update(completed_increment=1)
 
     print(f"\n全 {len(tasks)} のノードの取得が完了しました。")
