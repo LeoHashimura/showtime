@@ -109,13 +109,12 @@ class ProgressDisplay:
         # --- Prepare Line 2: Status Text ---
         line2_str = self.get_status_line_text()
 
-        # --- Cursors and Printing (Robust method) ---
-        sys.stdout.write(f'{CURSOR_UP}{CURSOR_UP}')
-        sys.stdout.write(CLEAR_LINE)
-        sys.stdout.write(line1_str + '\n')
-        sys.stdout.write(CLEAR_LINE)
-        sys.stdout.write(line2_str)
+        # --- Cursors and Printing (Final, robust method) ---
+        sys.stdout.write(f'\r{CLEAR_LINE}{line1_str}\n')
+        sys.stdout.write(f'\r{CLEAR_LINE}{line2_str}')
+        sys.stdout.write(CURSOR_UP) # Move back to the start of the second line
         sys.stdout.flush()
+
 
 def create_zip_file(files_to_zip, zip_filename):
     try:
