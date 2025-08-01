@@ -151,7 +151,7 @@ async def execute_telnet_async(node_info, log_file_path, status_queue=None):
             await _update_status(status_queue, node_name, 'success')
             return log_file_path
 
-        except (asyncio.TimeoutError, asyncssh.TimeoutError):
+        except asyncio.TimeoutError:
             # Re-raise timeouts so the main loop can handle them specifically
             raise
         except Exception as e:
@@ -209,7 +209,7 @@ async def execute_ssh_async(node_info, log_file_path, status_queue=None):
             await _update_status(status_queue, node_name, 'success')
             return log_file_path
 
-        except (asyncio.TimeoutError, asyncssh.TimeoutError):
+        except asyncio.TimeoutError:
             # Re-raise timeouts so the main loop can handle them specifically
             raise
         except Exception as e:

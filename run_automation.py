@@ -35,6 +35,7 @@ def get_pdkey():
 class ProgressDisplay:
     def __init__(self, all_nodes, status_queue, nodes_with_timeouts):
         self.all_node_names = [node['nodename'] for node in all_nodes]
+        self.nodes_with_timeouts = dict(nodes_with_timeouts)
         self.node_statuses = {name: 'pending' for name in self.all_node_names}
         self.status_queue = status_queue
         self.completed_count = 0
@@ -44,43 +45,29 @@ class ProgressDisplay:
 
         if nodes_with_timeouts:
             sorted_by_timeout = sorted(nodes_with_timeouts, key=lambda x: x[1])
-            self.shortest_node = sorted_by_timeout[0][0]
-            self.longest_node = sorted_by_timeout[-1][0]
+            self.shortest_node_name, self.shortest_node_timeout = sorted_by_timeout[0]
+            self.longest_node_name, self.longest_node_timeout = sorted_by_timeout[-1]
         else:
-            self.shortest_node = "N/A"
-            self.longest_node = "N/A"
+            self.shortest_node_name, self.shortest_node_timeout = "N/A", 0
+            self.longest_node_name, self.longest_node_timeout = "N/A", 0
 
     def get_status_line_text(self):
         timed_out_nodes = [name for name, status in self.node_statuses.items() if status == 'timeout']
 
         if not timed_out_nodes:
-            max_len = 40
-            s_node = self.shortest_node
-            l_node = self.longest_node
-            if len(s_node) > max_len: s_node = s_node[:max_len-3] + '...'
-            if len(l_node) > max_len: l_node = l_node[:max_len-3] + '...'
-            return f"Shortest: {s_node}, Longest: {l_node}"
+            s_node = self.shortest_node_name
+            l_node = self.longest_node_name
+            s_timeout = self.shortest_node_timeout
+            l_timeout = self.longest_node_timeout
+            return f"最短タイムアウト: {s_node} ({s_timeout:.1f}s), 最長タイムアウト: {l_node} ({l_timeout:.1f}s)"
         else:
-            terminal_width = 120
-            prefix = "Timeouts: "
-            available_width = terminal_width - len(prefix)
-            
+            prefix = "タイムアウト: "
             nodes_str = ", ".join(timed_out_nodes)
-            if len(nodes_str) > available_width:
-                truncated_nodes = []
-                current_len = 0
-                for node in timed_out_nodes:
-                    if current_len + len(node) + 2 > available_width - 3:
-                        break
-                    truncated_nodes.append(node)
-                    current_len += len(node) + 2
-                nodes_str = ", ".join(truncated_nodes) + "..."
             return f"{prefix}{nodes_str}"
 
     async def update(self):
         if not self.has_printed_once:
-            # Reserve two lines on the first run only
-            sys.stdout.write('\n\n')
+            sys.stdout.write('\n\n') # Reserve two lines on the first run
             self.has_printed_once = True
 
         self.shimmer_state = (self.shimmer_state + 1) % 4
