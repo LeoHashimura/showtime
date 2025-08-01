@@ -39,8 +39,6 @@ class ProgressDisplay:
         self.status_queue = status_queue
         self.completed_count = 0
         self.total_nodes = len(self.all_node_names)
-        self.display_limit = 20
-        self.displayed_nodes = []
         self.shimmer_state = 0
 
         if nodes_with_timeouts:
@@ -51,12 +49,8 @@ class ProgressDisplay:
             self.shortest_node = "N/A"
             self.longest_node = "N/A"
 
-        self._print_initial_lines()
-
-    def _print_initial_lines(self):
-        # Reserve two lines, then move cursor to the start of the first one.
+        # Print two blank lines to reserve space, but do not move cursor yet.
         sys.stdout.write('\n\n')
-        sys.stdout.write(f'{CURSOR_UP}{CURSOR_UP}\r')
         sys.stdout.flush()
 
     def get_status_line_text(self):
@@ -86,47 +80,20 @@ class ProgressDisplay:
                 nodes_str = ", ".join(truncated_nodes) + "..."
             return f"{prefix}{nodes_str}"
 
-    def _update_displayed_nodes(self):
-        active_nodes = [name for name, status in self.node_statuses.items() if status not in ['success', 'error', 'timeout']]
-        new_displayed_nodes = [node for node in self.displayed_nodes if node in active_nodes]
-
-        for node_name in self.all_node_names:
-            if node_name not in new_displayed_nodes and node_name in active_nodes:
-                if len(new_displayed_nodes) < self.display_limit:
-                    new_displayed_nodes.append(node_name)
-                else:
-                    break
-
-        if len(new_displayed_nodes) < self.display_limit:
-            completed_nodes = [name for name, status in self.node_statuses.items() if status in ['success', 'error', 'timeout']]
-            for node_name in completed_nodes:
-                if node_name not in new_displayed_nodes and len(new_displayed_nodes) < self.display_limit:
-                    new_displayed_nodes.append(node_name)
-                else:
-                    break
-        self.displayed_nodes = new_displayed_nodes[:self.display_limit]
-
     async def update(self):
-        self.shimmer_state = (self.shimmer_state + 1) % 4 # Cycle through 4 states for shimmer
+        self.shimmer_state = (self.shimmer_state + 1) % 4
         
-        # Process all pending status updates from the queue
         while not self.status_queue.empty():
             update_info = await self.status_queue.get()
             self.node_statuses[update_info['node']] = update_info['status']
 
-        self._update_displayed_nodes()
-
-        sys.stdout.write(CLEAR_LINE)
+        # --- Prepare Line 1: Percentage and Node Status Bar ---
         percent = ("{0:.1f}").format(100 * (self.completed_count / float(self.total_nodes))) if self.total_nodes > 0 else "0.0"
-        fill = '█'
-        length = 50
-        filled_length = int(length * self.completed_count // self.total_nodes) if self.total_nodes > 0 else 0
-        bar = fill * filled_length + '-' * (length - filled_length)
-        progress_bar_str = f'|{bar}| {percent}% Complete'
+        percent_str = f"{percent}% "
 
         node_status_bar = ""
-        shimmer_chars = ['▓', '▒', '░', '▒'] # Characters for the shimmer effect
-        for node_name in self.displayed_nodes:
+        shimmer_chars = ['▓', '▒', '░', '▒']
+        for i, node_name in enumerate(self.all_node_names):
             status = self.node_statuses.get(node_name, 'pending')
             char = '█'
             color = COLOR_RESET
@@ -134,7 +101,10 @@ class ProgressDisplay:
                 char = '█'
                 color = COLOR_YELLOW
             elif status == 'executing_commands':
-                char = shimmer_chars[self.shimmer_state]
+                # Use a hash of the node name to create a stable but unique offset
+                # This ensures each node twinkles independently
+                offset = hash(node_name) % 4
+                char = shimmer_chars[(self.shimmer_state + offset) % 4]
                 color = COLOR_GREEN
             elif status == 'success':
                 char = '█'
@@ -147,14 +117,17 @@ class ProgressDisplay:
                 color = COLOR_RED
             node_status_bar += f"{color}{char}{COLOR_RESET}"
         
-        line1_str = f"{progress_bar_str} {node_status_bar}"
-        sys.stdout.write(line1_str + '\n')
-
-        sys.stdout.write(CLEAR_LINE)
-        line2_str = self.get_status_line_text()
-        sys.stdout.write(line2_str)
+        line1_str = f"{percent_str}{node_status_bar}"
         
-        sys.stdout.write(f'{CURSOR_UP}\r')
+        # --- Prepare Line 2: Status Text ---
+        line2_str = self.get_status_line_text()
+
+        # --- Cursors and Printing (The fix for the 3rd line bug is here) ---
+        sys.stdout.write(f'{CURSOR_UP}{CURSOR_UP}') # Move to start of the reserved space
+        sys.stdout.write(CLEAR_LINE)
+        sys.stdout.write(line1_str + '\n')
+        sys.stdout.write(CLEAR_LINE)
+        sys.stdout.write(line2_str)
         sys.stdout.flush()
 
 def create_zip_file(files_to_zip, zip_filename):
