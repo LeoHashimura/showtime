@@ -3,8 +3,24 @@ import os
 import sys
 import zipfile
 from datetime import datetime
+import time
 from config_parsers import parse_nodes_from_csv, parse_nodes_from_excel
 from network_operations import execute_ssh_async, execute_telnet_async
+
+def get_pdkey():
+    kf, ma = '.pdkey', 5 * 24 * 60 * 60
+    if os.path.exists(kf) and time.time() - os.path.getmtime(kf) < ma:
+        with open(kf, 'r') as f:
+            return f.read().strip()
+    else:
+        while True:
+            nk = input("Enter new key or URL: ")
+            k = nk.split("key=")[-1]
+            if k:
+                with open(kf, 'w') as f:
+                    f.write(k)
+                return k
+
 def print_progress_bar(iteration, total, prefix='Progress:', suffix='Complete', length=50, fill='█'):
     percent = ("{0:.1f}").format(100 * (iteration / float(total)))
     filled_length = int(length * iteration // total)
@@ -22,10 +38,12 @@ def create_zip_file(files_to_zip, zip_filename):
     except Exception as e:
         print(f"\nError: 次の理由でzip固め損ねました: {e}")
 async def main():
+    pdkey = get_pdkey()
     BASE_NODE_TIMEOUT = 30.0 #基本1ノードにつき30秒確保します。
     SECONDS_PER_COMMAND = 5.0 #各コマンド実行に5秒の余裕を持たせます。
     PDRIVE = "ls -l" #ここは任意のコマンドを実行するための変数です。あれに変更してください。
     if len(sys.argv) < 2 or sys.argv[1] in ('-h', '--help'):
+
         print("Usage: python3 run_automation.py [path_to_input_file] [options]")
         print("\nArguments:")
         print("  path_to_input_file: コマンドファイルのファイルパス")
@@ -66,7 +84,7 @@ async def main():
     if os.path.dirname(input_file): #入力ファイルの場所と同じ場所に出力する。この辺り権限で色々エラー怖い
         output_dir = os.path.join(os.path.dirname(input_file), output_dir)
     print(f"Output directory: {output_dir}")
-    os.makedirs(output_dir, exist_ok=True)　#ないわけないんだけどね、のこしときます
+    os.makedirs(output_dir, exist_ok=True) #ないわけないんだけどね、のこしときます
     #print(f"Created output directory: {output_dir}")
 
     tasks = []
@@ -121,7 +139,7 @@ async def main():
         post_command = f"{PDRIVE}{pdkey} {zip_destination}\n" 
         os.system(post_command)
 if __name__ == "__main__":
-    os.system("export $LANG="ja_JP.UTF-8"")  # 日本語環境を設定 本当は元にもどすべきなんでしょうね
+    os.environ['LANG'] = 'ja_JP.UTF-8'  # 日本語環境を設定 本当は元にもどすべきなんでしょうね
     loop = asyncio.get_event_loop()
     try:
         loop.run_until_complete(main())
