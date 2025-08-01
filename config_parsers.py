@@ -65,10 +65,26 @@ def parse_nodes_from_excel(file_path, sheet_name=1):
         else:
             sheet = workbook[sheet_name]
 
-        # Transpose the data: convert columns to rows
-        transposed_data = []
-        for col in sheet.iter_cols():
-            transposed_data.append([cell.value if cell.value is not None else "" for cell in col])
+        # --- New "Fill-Right" Logic ---
+        # 1. Read data row by row from the sheet
+        data_by_rows = []
+        for row in sheet.iter_rows():
+            data_by_rows.append([cell.value if cell.value is not None else "" for cell in row])
+
+        # 2. Apply "fill-right" logic to each row
+        for row in data_by_rows:
+            last_value = ""
+            for i, cell_value in enumerate(row):
+                if str(cell_value).strip() != "":
+                    last_value = cell_value
+                else:
+                    row[i] = last_value
+        
+        # 3. Transpose the processed data to get columns for parsing
+        if not data_by_rows:
+            return []
+        transposed_data = list(zip_longest(*data_by_rows, fillvalue=''))
+        # --- End of New Logic ---
 
         if not transposed_data:
             return []
