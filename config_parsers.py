@@ -57,7 +57,6 @@ def parse_nodes_from_excel(file_path, sheet_name=1):
         workbook = openpyxl.load_workbook(file_path, data_only=True)
         
         if isinstance(sheet_name, int):
-            # openpyxl is 0-indexed, but user provides 1-indexed
             if 1 <= sheet_name <= len(workbook.sheetnames):
                 sheet = workbook.worksheets[sheet_name - 1]
             else:
@@ -65,29 +64,27 @@ def parse_nodes_from_excel(file_path, sheet_name=1):
         else:
             sheet = workbook[sheet_name]
 
-        # --- New "Fill-Right" Logic ---
-        # 1. Read data row by row from the sheet
+        # Read data into a 2D list (list of rows)
         data_by_rows = []
         for row in sheet.iter_rows():
             data_by_rows.append([cell.value if cell.value is not None else "" for cell in row])
 
-        # 2. Apply "fill-right" logic to each row
+        # Corrected "Fill-Right" Logic
         for row in data_by_rows:
-            last_value = ""
-            for i, cell_value in enumerate(row):
-                if str(cell_value).strip() != "":
-                    last_value = cell_value
-                else:
-                    row[i] = last_value
-        
-        # 3. Transpose the processed data to get columns for parsing
-        if not data_by_rows:
+            # The first column (index 0) contains headers and should not be filled.
+            # We start the logic from the first data column (index 1).
+            if len(row) > 1:
+                last_value = row[1]  # Initialize with the first data point
+                for i in range(2, len(row)):
+                    if str(row[i]).strip() == "":
+                        row[i] = last_value
+                    else:
+                        last_value = row[i]
+
+        # Transpose the processed data to get columns for parsing
+        if not data_by_rows or not data_by_rows[0]:
             return []
         transposed_data = list(zip_longest(*data_by_rows, fillvalue=''))
-        # --- End of New Logic ---
-
-        if not transposed_data:
-            return []
 
         headers = [str(h).strip() for h in transposed_data[0]]
 

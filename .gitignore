@@ -1,0 +1,12 @@
+# Python cache
+__pycache__/
+
+# Generated output directories
+output_*/
+
+# Secret key file
+.pdkey
+
+# Data files - these should not be in the repository
+*.xlsx
+*.csv

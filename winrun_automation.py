@@ -6,6 +6,19 @@ from datetime import datetime
 import time
 from config_parsers import parse_nodes_from_csv, parse_nodes_from_excel
 from network_operations import execute_ssh_async, execute_telnet_async, PromptTimeoutError
+#this is a test version of run_automation.py.
+#since we established that network connections seems fine,
+#this file is to test UI enhancements, xlsx parsing, and other features.
+#after checking on local windows computer, we will merge this into the main run_automation.py file.
+#main change for conversion to linux is to delete asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy()) 
+#and uncomment the os.environ['LANG'] = 'ja_JP.UTF-8' line, and os,system(post_command) line.
+# This script is designed to run automation tasks on multiple nodes
+# and display progress in a terminal-friendly manner.
+# It supports SSH and Telnet protocols, handles timeouts, and provides a visual progress display.
+# It also allows for zipping the output files after completion.
+# Ensure the script is run with Python 3.1+ for asyncio compatibility    
+# Ensure the necessary libraries are installed:
+# pip install asyncio  openpyxl  telnetlib3
 
 # ANSI escape codes for cursor control
 CURSOR_UP = '\x1b[1A'
@@ -44,8 +57,8 @@ class ProgressDisplay:
             self.shortest_node_name, self.shortest_node_timeout = sorted_by_timeout[0]
             self.longest_node_name, self.longest_node_timeout = sorted_by_timeout[-1]
         else:
-            self.shortest_node_name, self.shortest_node_timeout = "N/A", 0
-            self.longest_node_name, self.longest_node_timeout = "N/A", 0
+            self.shortest_node_name, self.shortest_node_timeout = "なんかおかしい", 0
+            self.longest_node_name, self.longest_node_timeout = "なんかおかしい", 0
 
     def get_status_line_text(self):
         failed_nodes = [name for name, status in self.node_statuses.items() if status in ['error', 'timeout', 'no_prompt']]
@@ -55,7 +68,7 @@ class ProgressDisplay:
             l_node = self.longest_node_name
             s_timeout = self.shortest_node_timeout
             l_timeout = self.longest_node_timeout
-            return f"最短タイムアウト: {s_node} ({s_timeout:.1f}s), 最長タイムアウト: {l_node} ({l_timeout:.1f}s)"
+            return f"最短Timeout {s_node} ({s_timeout:.1f}s), 最長Timeout: {l_node} ({l_timeout:.1f}s)"
         else:
             prefix = "Errors In: "
             nodes_str = ", ".join(failed_nodes)
@@ -201,6 +214,10 @@ async def main():
         except PromptTimeoutError:
             return node['nodename'], None, "PromptTimeoutError"
         except Exception as e:
+            import traceback
+            print(f"\n*** UNEXPECTED ERROR CAUGHT IN GENERIC BLOCK ***\n")
+            traceback.print_exc()
+            print(f"\n*** END OF TRACEBACK ***\n")
             return node['nodename'], None, str(e)
 
     async def display_updater(d):
@@ -243,10 +260,12 @@ async def main():
         zip_destination = os.path.join(output_dir, zip_filename)
         create_zip_file(successful_log_files, zip_destination)
         post_command = f"{PDRIVE}{pdkey} {zip_destination}\n"
-        os.system(post_command)
+#        os.system(post_command)
 
 if __name__ == "__main__":
-    os.environ['LANG'] = 'ja_JP.UTF-8'
+    if os.name == 'nt':
+        asyncio.set_event_loop_policy(asyncio.WindowsSelectorEventLoopPolicy())
+    
     loop = asyncio.get_event_loop()
     try:
         loop.run_until_complete(main())

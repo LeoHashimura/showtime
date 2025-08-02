@@ -2,6 +2,10 @@ import asyncio
 import re
 import asyncssh
 
+# Custom exception for prompt timeouts
+class PromptTimeoutError(Exception):
+    pass
+
 PROMPT_RE = re.compile(b'\S+[>#$]\s*$')
 
 async def _update_status(queue, node_name, status, message=""):
@@ -21,7 +25,8 @@ async def read_until_prompt(stream, timeout=40):
             if non_empty_lines and PROMPT_RE.search(non_empty_lines[-1]):
                 break
     except asyncio.TimeoutError:
-        full_output += b"\n*** TIMEOUT ***\n"
+        # Raise our custom exception instead of returning a message
+        raise PromptTimeoutError(f"Timeout waiting for prompt after {timeout} seconds.")
     
     return full_output.decode('utf-8', errors='ignore')
 
@@ -34,7 +39,7 @@ async def execute_telnet_async(node_info, log_file_path, status_queue=None):
             log_file.flush()
             
             reader, writer = await asyncio.wait_for(
-                asyncio.open_connection(node_info['ip_address'], 23),
+                asyncio.open_connection(node_info['ip_address'], 8023),
                 timeout=10
             )
 
@@ -150,14 +155,14 @@ async def execute_telnet_async(node_info, log_file_path, status_queue=None):
             
             await _update_status(status_queue, node_name, 'success')
             return log_file_path
-
+        except (asyncio.TimeoutError, PromptTimeoutError):
+            # Let the main loop handle all timeout types specifically
+            raise
         except Exception as e:
-            # If any exception occurs, including timeouts from the parent task,
-            # log it and report a generic error.
-            error_message = f"Failed to connect or execute commands on {node_info['nodename']}. Reason: {e}"
-            await _update_status(status_queue, node_name, 'error', str(e))
+            # Handle any other unexpected errors
+            error_message = f"An unexpected error occurred during Telnet: {e}"
+            await _update_status(status_queue, node_name, 'error', error_message)
             log_file.write(f"\n*** ERROR: {error_message} ***\n")
-            log_file.flush()
             return None
 
 
@@ -207,12 +212,18 @@ async def execute_ssh_async(node_info, log_file_path, status_queue=None):
 
             await _update_status(status_queue, node_name, 'success')
             return log_file_path
-
+        except (asyncio.TimeoutError, PromptTimeoutError):
+            # Let the main loop handle all timeout types specifically
+            raise
+        except asyncssh.Error as e:
+            # Handle specific SSH errors (e.g., authentication failure)
+            error_message = f"SSH connection failed: {e}"
+            await _update_status(status_queue, node_name, 'error', error_message)
+            log_file.write(f"\n*** SSH ERROR: {error_message} ***\n")
+            return None
         except Exception as e:
-            # If any exception occurs, including timeouts from the parent task,
-            # log it and report a generic error.
-            error_message = f"Failed to connect or execute commands on {node_info['nodename']}. Reason: {e}"
-            await _update_status(status_queue, node_name, 'error', str(e))
+            # Handle any other unexpected errors
+            error_message = f"An unexpected error occurred during SSH: {e}"
+            await _update_status(status_queue, node_name, 'error', error_message)
             log_file.write(f"\n*** ERROR: {error_message} ***\n")
-            log_file.flush()
             return None
