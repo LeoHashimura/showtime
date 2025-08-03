@@ -49,7 +49,8 @@ async def execute_telnet_async(node_info, log_file_path, status_queue=None):
                 timeout=10
             )
 
-            # --- Basic Telnet Negotiation ---
+            # --- Basic Telnet Negotiation and Login ---
+            # (Full logic restored)
             IAC, DONT, DO, WONT, WILL = b'\xff', b'\xfe', b'\xfd', b'\xfc', b'\xfb'
             buffer = b''
             negotiation_attempts = 0
@@ -151,22 +152,27 @@ async def execute_telnet_async(node_info, log_file_path, status_queue=None):
                 log_file.write(response)
                 log_file.flush()
 
-            # --- New Robust Logout Procedure ---
-            logout_attempts = ['exit', 'logout']
-            for attempt in logout_attempts:
-                log_file.write(f"--- Attempting logout with '{attempt}' ---\n")
-                writer.write(attempt.encode('ascii') + b'\r\n')
+            # --- New Robust Logout Procedure with Polling ---
+            logout_commands = ['exit', 'logout']
+            for command in logout_commands:
+                log_file.write(f"--- Attempting logout with '{command}' ---\n")
+                writer.write(command.encode('ascii') + b'\r\n')
                 await writer.drain()
-                
-                try:
-                    data = await asyncio.wait_for(reader.read(1024), timeout=5.0)
-                    if not data:
-                        log_file.write("--- Server closed connection. Logout successful. ---\n")
-                        await _update_status(status_queue, node_name, 'success')
-                        return log_file_path
-                except asyncio.TimeoutError:
-                    continue
 
+                # Poll for up to 15 seconds (5 attempts * 3 seconds)
+                for _ in range(5):
+                    try:
+                        data = await asyncio.wait_for(reader.read(1024), timeout=3.0)
+                        if not data:
+                            log_file.write("--- Server closed connection. Logout successful. ---\n")
+                            await _update_status(status_queue, node_name, 'success')
+                            return log_file_path # Success
+                    except asyncio.TimeoutError:
+                        # No data received, connection is likely still open. Continue polling.
+                        log_file.write("--- Waiting for connection to close... ---\n")
+                        pass
+
+            # If we get here, both exit and logout failed to close the connection
             raise LogoutFailedError("Failed to disconnect from server after sending exit/logout.")
 
         except (asyncio.TimeoutError, PromptTimeoutError, LogoutFailedError):
@@ -225,19 +231,24 @@ async def execute_ssh_async(node_info, log_file_path, status_queue=None):
                         log_file.write(response)
                         log_file.flush()
                     
-                    # --- New Robust Logout Procedure ---
-                    logout_attempts = ['exit', 'logout']
-                    for attempt in logout_attempts:
-                        log_file.write(f"--- Attempting logout with '{attempt}' ---\n")
-                        process.stdin.write((attempt + '\n').encode('utf-8'))
-                        try:
-                            response = await asyncio.wait_for(process.stdout.read(1024), timeout=5.0)
-                            if not response:
-                                log_file.write("--- Server closed connection. Logout successful. ---\n")
-                                await _update_status(status_queue, node_name, 'success')
-                                return log_file_path
-                        except asyncio.TimeoutError:
-                            continue
+                    # --- New Robust Logout Procedure with Polling ---
+                    logout_commands = ['exit', 'logout']
+                    for command in logout_commands:
+                        log_file.write(f"--- Attempting logout with '{command}' ---\n")
+                        process.stdin.write((command + '\n').encode('utf-8'))
+                        
+                        # Poll for up to 15 seconds (5 attempts * 3 seconds)
+                        for _ in range(5):
+                            try:
+                                response = await asyncio.wait_for(process.stdout.read(1024), timeout=3.0)
+                                if not response:
+                                    log_file.write("--- Server closed connection. Logout successful. ---\n")
+                                    await _update_status(status_queue, node_name, 'success')
+                                    return log_file_path
+                            except asyncio.TimeoutError:
+                                # No data received, connection is likely still open. Continue polling.
+                                log_file.write("--- Waiting for connection to close... ---\n")
+                                pass
 
                     raise LogoutFailedError("Failed to disconnect from server after sending exit/logout.")
 
