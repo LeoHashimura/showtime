@@ -4,8 +4,7 @@ import sys
 import zipfile
 from datetime import datetime
 import time
-import threading
-from pynput import keyboard
+import curses
 from config_parsers import parse_nodes_from_csv, parse_nodes_from_excel
 from network_operations import execute_ssh_async, execute_telnet_async, PromptTimeoutError, LogoutFailedError
 
@@ -130,21 +129,25 @@ def create_zip_file(files_to_zip, zip_filename):
     except Exception as e:
         print(f"\nError: 次の理由でzip固め損ねました: {e}")
 
-def keyboard_listener(stop_event, loop):
-    print("\nPress 'q' to initiate a graceful shutdown.\n")
-    def on_press(key):
-        try:
-            if key.char == 'q':
-                print("\n'q' pressed. Initiating graceful shutdown...")
-                loop.call_soon_threadsafe(stop_event.set)
-                return False
-        except AttributeError:
-            pass
+def create_zip_file(files_to_zip, zip_filename):
+    try:
+        with zipfile.ZipFile(zip_filename, 'w', zipfile.ZIP_DEFLATED) as zf:
+            for file in files_to_zip:
+                zf.write(file, os.path.basename(file))
+        print(f"\nzipに固めましたよ: {zip_filename}")
+    except Exception as e:
+        print(f"\nError: 次の理由でzip固め損ねました: {e}")
 
-    with keyboard.Listener(on_press=on_press) as listener:
-        listener.join()
+async def keyboard_listener(stdscr, stop_event):
+    stdscr.nodelay(True)  # Make getch() non-blocking
+    while not stop_event.is_set():
+        key = stdscr.getch()
+        if key == ord('q'):
+            stop_event.set()
+            break
+        await asyncio.sleep(0.1)
 
-async def main():
+async def main_wrapped(stdscr):
     # --- Argument Parsing ---
     import argparse
     parser = argparse.ArgumentParser(description="Run automation tasks on network nodes.")
@@ -171,7 +174,132 @@ async def main():
     if args.interval == -1:
         await single_run_mode(nodes, args)
     else:
-        await cycle_mode(nodes, args)
+        await cycle_mode(nodes, args, stdscr)
+
+async def single_run_mode(nodes, args):
+    # This is the original run_automation.py logic
+    print(f"--- Running in single-run mode ---")
+    pdkey = get_pdkey()
+    BASE_NODE_TIMEOUT = 30.0
+    SECONDS_PER_COMMAND = 5.0
+    PDRIVE = "ls -l"
+
+    timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+    output_dir = f"output_{timestamp}"
+    if os.path.dirname(args.input_file):
+        output_dir = os.path.join(os.path.dirname(args.input_file), output_dir)
+    os.makedirs(output_dir, exist_ok=True)
+
+    status_queue = asyncio.Queue()
+    nodes_with_timeouts = []
+
+    for node in nodes:
+        num_commands = len(node.get('commands', [])) + len([k for k in node if k.startswith('additional_command')])
+        node_timeout = BASE_NODE_TIMEOUT + (num_commands * SECONDS_PER_COMMAND)
+        nodes_with_timeouts.append((node['nodename'], node_timeout))
+
+    display = ProgressDisplay(nodes, status_queue, nodes_with_timeouts)
+
+    async def run_node_task(node):
+        node_timeout = next((t for n, t in nodes_with_timeouts if n == node['nodename']), BASE_NODE_TIMEOUT)
+        log_file_path = os.path.join(output_dir, f"{node['nodename']}_{timestamp}.txt")
+        protocol = node.get('protocol', 'ssh').lower()
+        task = None
+        if protocol == 'ssh':
+            task = execute_ssh_async(node, log_file_path, status_queue)
+        elif protocol == 'telnet':
+            task = execute_telnet_async(node, log_file_path, status_queue)
+        else:
+            await status_queue.put({'node': node['nodename'], 'status': 'error', 'message': f'Unknown protocol: {protocol}'})
+            return node['nodename'], None, f"Unknown protocol: {protocol}"
+        
+        try:
+            result = await asyncio.wait_for(task, timeout=node_timeout)
+            return node['nodename'], result, None
+        except asyncio.TimeoutError:
+            return node['nodename'], None, "TimeoutError"
+        except PromptTimeoutError:
+            return node['nodename'], None, "PromptTimeoutError"
+        except LogoutFailedError:
+            return node['nodename'], None, "LogoutFailedError"
+        except Exception as e:
+            return node['nodename'], None, str(e)
+
+    async def display_updater(d):
+        while d.completed_count < d.total_nodes:
+            await d.update()
+            await asyncio.sleep(0.2)
+
+    tasks = [run_node_task(node) for node in nodes]
+    updater_task = asyncio.ensure_future(display_updater(display))
+
+    successful_log_files = []
+    for future in asyncio.as_completed(tasks):
+        node_name, result, error = await future
+        display.completed_count += 1
+
+        if error == "TimeoutError":
+            display.node_statuses[node_name] = 'timeout'
+        elif error == "PromptTimeoutError":
+            display.node_statuses[node_name] = 'no_prompt'
+        elif error == "LogoutFailedError":
+            display.node_statuses[node_name] = 'logout_failed'
+        elif error:
+            display.node_statuses[node_name] = 'error'
+        else:
+            if result:
+                successful_log_files.append(result)
+            display.node_statuses[node_name] = 'success'
+    
+    updater_task.cancel()
+    try:
+        await updater_task
+    except asyncio.CancelledError:
+        pass
+    await display.update()
+
+    sys.stdout.write('\n\n') 
+    print(f"全 {len(successful_log_files)}/{len(tasks)} のノードの取得が完了しました。")
+
+    if successful_log_files:
+        zip_filename = f"command_output_{timestamp}.zip"
+        zip_destination = os.path.join(output_dir, zip_filename)
+        create_zip_file(successful_log_files, zip_destination)
+        post_command = f"{PDRIVE}{pdkey} {zip_destination}\n"
+        os.system(post_command)
+
+
+async def cycle_mode(nodes, args, stdscr):
+    stdscr.clear()
+    stdscr.addstr(0, 0, f"--- Running in cycle mode. Interval: {args.interval}ms. Press 'q' to quit. ---")
+    stdscr.refresh()
+
+    stop_event = asyncio.Event()
+    status_queue = asyncio.Queue()
+    display = ProgressDisplay(nodes, status_queue, []) # No timeouts in cycle mode
+
+    async def run_node_cycle(node):
+        log_file_path = f"{node['nodename']}_cycle_log.txt"
+        protocol = node.get('protocol', 'ssh').lower()
+        
+        if protocol == 'ssh':
+            await execute_ssh_async(node, log_file_path, status_queue, args.interval, stop_event)
+        elif protocol == 'telnet':
+            await execute_telnet_async(node, log_file_path, status_queue, args.interval, stop_event)
+        else:
+            await _update_status(status_queue, node['nodename'], 'error', f'Unknown protocol: {protocol}')
+
+    tasks = [run_node_cycle(node) for node in nodes]
+    updater_task = asyncio.ensure_future(display.update())
+    listener_task = asyncio.ensure_future(keyboard_listener(stdscr, stop_event))
+
+    await asyncio.gather(*tasks, return_exceptions=True)
+
+    updater_task.cancel()
+    listener_task.cancel()
+    stdscr.addstr(1, 0, "\nAll node cycles have been stopped.")
+    stdscr.refresh()
+
 
 async def single_run_mode(nodes, args):
     # This is the original run_automation.py logic
@@ -299,10 +427,10 @@ async def cycle_mode(nodes, args):
 
 
 if __name__ == "__main__":
-    # Set encoding for Windows specifically, if needed, though pynput and modern terminals should handle it.
-    # if os.name == 'nt':
-    #     sys.stdout.reconfigure(encoding='utf-8')
     try:
-        asyncio.run(main())
+        curses.wrapper(lambda stdscr: asyncio.run(main_wrapped(stdscr)))
+    except curses.error as e:
+        print(f"Error: curses failed to initialize. Your terminal may not be supported.")
+        print(f"({e})")
     except KeyboardInterrupt:
         print("\nCaught keyboard interrupt. Exiting.")
