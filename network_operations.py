@@ -23,19 +23,17 @@ async def read_until_prompt(stream, timeout=40):
         while True:
             chunk = await asyncio.wait_for(stream.read(1024), timeout=timeout)
             if not chunk:
-                # Connection closed, return what we have
                 break
             full_output += chunk
             non_empty_lines = [line for line in full_output.splitlines() if line.strip()]
             if non_empty_lines and PROMPT_RE.search(non_empty_lines[-1]):
                 break
     except asyncio.TimeoutError:
-        # Raise our custom exception instead of returning a message
         raise PromptTimeoutError(f"Timeout waiting for prompt after {timeout} seconds.")
     
     return full_output.decode('utf-8', errors='ignore')
 
-async def execute_telnet_async(node_info, log_file_path, status_queue=None):
+async def execute_telnet_async(node_info, log_file_path, status_queue=None, cycle_interval=-1, stop_event=None):
     node_name = node_info['nodename']
     writer = None
     with open(log_file_path, 'w', encoding='utf-8') as log_file:
@@ -49,8 +47,7 @@ async def execute_telnet_async(node_info, log_file_path, status_queue=None):
                 timeout=10
             )
 
-            # --- Basic Telnet Negotiation and Login ---
-            # (Full logic restored)
+            # --- Full Telnet Login Sequence ---
             IAC, DONT, DO, WONT, WILL = b'\xff', b'\xfe', b'\xfd', b'\xfc', b'\xfb'
             buffer = b''
             negotiation_attempts = 0
@@ -60,7 +57,6 @@ async def execute_telnet_async(node_info, log_file_path, status_queue=None):
                     data = await asyncio.wait_for(reader.read(1024), timeout=0.5)
                     if not data:
                         break
-                    
                     response = b''
                     i = 0
                     clean_chunk = b''
@@ -76,11 +72,9 @@ async def execute_telnet_async(node_info, log_file_path, status_queue=None):
                         else:
                             clean_chunk += data[i:i+1]
                             i += 1
-                    
                     if response:
                         writer.write(response)
                         await writer.drain()
-                    
                     buffer += clean_chunk
                     if any(p in buffer.lower() for p in [b'username:', b'login:']):
                         break
@@ -94,14 +88,10 @@ async def execute_telnet_async(node_info, log_file_path, status_queue=None):
             if not any(p in buffer.lower() for p in [b'username:', b'login:']):
                 raise asyncio.TimeoutError("Timeout waiting for username/login prompt.")
 
-            log_file.write(f"--- Sending login ID: {node_info['login_id']} ---\n")
-            log_file.flush()
             writer.write(node_info['login_id'].encode('ascii') + b"\r\n")
             await writer.drain()
-
             buffer = b""
             prompt_found = False
-            log_file.write("--- Waiting for password prompt ---\n")
             for _ in range(30):
                 try:
                     chunk = await asyncio.wait_for(reader.read(100), timeout=0.5)
@@ -113,66 +103,64 @@ async def execute_telnet_async(node_info, log_file_path, status_queue=None):
                         break
                 except asyncio.TimeoutError:
                     pass
-
-            log_file.write(f"Received: {buffer.decode(errors='ignore')}\n")
-            log_file.flush()
             if not prompt_found:
                 raise asyncio.TimeoutError("Timeout waiting for password prompt.")
 
-            log_file.write("--- Sending password ---\n")
-            log_file.flush()
             writer.write(node_info['login_password'].encode('ascii') + b"\r\n")
             await writer.drain()
-
             initial_output = await read_until_prompt(reader)
             log_file.write(initial_output)
             log_file.flush()
 
-            await _update_status(status_queue, node_name, 'executing_commands')
-            if node_info.get('additional_command_1'):
-                cmd = node_info['additional_command_1']
-                writer.write(cmd.encode('ascii') + b'\r\n')
-                await writer.drain()
-                response = await read_until_prompt(reader)
-                log_file.write(response)
-                log_file.flush()
-                
-                if node_info.get('additional_command_2') and ":" in response:
-                    cmd2 = node_info['additional_command_2']
-                    writer.write(cmd2.encode('ascii') + b'\r\n')
+            # --- Command Execution Logic ---
+            async def run_commands():
+                await _update_status(status_queue, node_name, 'executing_commands')
+                if node_info.get('additional_command_1'):
+                    cmd = node_info['additional_command_1']
+                    writer.write(cmd.encode('ascii') + b'\r\n')
                     await writer.drain()
-                    response2 = await read_until_prompt(reader)
-                    log_file.write(response2)
+                    response = await read_until_prompt(reader)
+                    log_file.write(response)
+                    log_file.flush()
+                    if node_info.get('additional_command_2') and ":" in response:
+                        cmd2 = node_info['additional_command_2']
+                        writer.write(cmd2.encode('ascii') + b'\r\n')
+                        await writer.drain()
+                        response2 = await read_until_prompt(reader)
+                        log_file.write(response2)
+                        log_file.flush()
+                for cmd in node_info['commands']:
+                    writer.write(cmd.encode('ascii') + b'\r\n')
+                    await writer.drain()
+                    response = await read_until_prompt(reader)
+                    log_file.write(response)
                     log_file.flush()
 
-            for cmd in node_info['commands']:
-                writer.write(cmd.encode('ascii') + b'\r\n')
-                await writer.drain()
-                response = await read_until_prompt(reader)
-                log_file.write(response)
-                log_file.flush()
+            if cycle_interval == -1:
+                # Single run mode for run_automation.py
+                await run_commands()
+            else:
+                # Cycle mode for run_cycle.py
+                while not stop_event.is_set():
+                    await run_commands()
+                    await asyncio.sleep(cycle_interval / 1000)
 
-            # --- New Robust Logout Procedure with Polling ---
+            # --- Robust Logout Procedure ---
             logout_commands = ['exit', 'logout']
             for command in logout_commands:
                 log_file.write(f"--- Attempting logout with '{command}' ---\n")
                 writer.write(command.encode('ascii') + b'\r\n')
                 await writer.drain()
-
-                # Poll for up to 15 seconds (5 attempts * 3 seconds)
                 for _ in range(5):
                     try:
                         data = await asyncio.wait_for(reader.read(1024), timeout=3.0)
                         if not data:
                             log_file.write("--- Server closed connection. Logout successful. ---\n")
                             await _update_status(status_queue, node_name, 'success')
-                            return log_file_path # Success
+                            return log_file_path
                     except asyncio.TimeoutError:
-                        # No data received, connection is likely still open. Continue polling.
                         log_file.write("--- Waiting for connection to close... ---\n")
                         pass
-
-            # If we get here, both exit and logout failed to close the connection
             raise LogoutFailedError("Failed to disconnect from server after sending exit/logout.")
 
         except (asyncio.TimeoutError, PromptTimeoutError, LogoutFailedError):
@@ -190,7 +178,7 @@ async def execute_telnet_async(node_info, log_file_path, status_queue=None):
                 except AttributeError:
                     pass
 
-async def execute_ssh_async(node_info, log_file_path, status_queue=None):
+async def execute_ssh_async(node_info, log_file_path, status_queue=None, cycle_interval=-1, stop_event=None):
     node_name = node_info['nodename']
     with open(log_file_path, 'w', encoding='utf-8') as log_file:
         try:
@@ -210,34 +198,41 @@ async def execute_ssh_async(node_info, log_file_path, status_queue=None):
                     log_file.write(initial_output)
                     log_file.flush()
 
-                    await _update_status(status_queue, node_name, 'executing_commands')
-                    if node_info.get('additional_command_1'):
-                        cmd = node_info['additional_command_1']
-                        process.stdin.write((cmd + '\n').encode('utf-8'))
-                        response = await read_until_prompt(process.stdout)
-                        log_file.write(response)
-                        log_file.flush()
-
-                        if node_info.get('additional_command_2') and ":" in response:
-                            cmd2 = node_info['additional_command_2']
-                            process.stdin.write((cmd2 + '\n').encode('utf-8'))
-                            response2 = await read_until_prompt(process.stdout)
-                            log_file.write(response2)
+                    # --- Command Execution Logic ---
+                    async def run_commands():
+                        await _update_status(status_queue, node_name, 'executing_commands')
+                        if node_info.get('additional_command_1'):
+                            cmd = node_info['additional_command_1']
+                            process.stdin.write((cmd + '\n').encode('utf-8'))
+                            response = await read_until_prompt(process.stdout)
+                            log_file.write(response)
+                            log_file.flush()
+                            if node_info.get('additional_command_2') and ":" in response:
+                                cmd2 = node_info['additional_command_2']
+                                process.stdin.write((cmd2 + '\n').encode('utf-8'))
+                                response2 = await read_until_prompt(process.stdout)
+                                log_file.write(response2)
+                                log_file.flush()
+                        for cmd in node_info['commands']:
+                            process.stdin.write((cmd + '\n').encode('utf-8'))
+                            response = await read_until_prompt(process.stdout)
+                            log_file.write(response)
                             log_file.flush()
 
-                    for cmd in node_info['commands']:
-                        process.stdin.write((cmd + '\n').encode('utf-8'))
-                        response = await read_until_prompt(process.stdout)
-                        log_file.write(response)
-                        log_file.flush()
+                    if cycle_interval == -1:
+                        # Single run mode for run_automation.py
+                        await run_commands()
+                    else:
+                        # Cycle mode for run_cycle.py
+                        while not stop_event.is_set():
+                            await run_commands()
+                            await asyncio.sleep(cycle_interval / 1000)
                     
-                    # --- New Robust Logout Procedure with Polling ---
+                    # --- Robust Logout Procedure ---
                     logout_commands = ['exit', 'logout']
                     for command in logout_commands:
                         log_file.write(f"--- Attempting logout with '{command}' ---\n")
                         process.stdin.write((command + '\n').encode('utf-8'))
-                        
-                        # Poll for up to 15 seconds (5 attempts * 3 seconds)
                         for _ in range(5):
                             try:
                                 response = await asyncio.wait_for(process.stdout.read(1024), timeout=3.0)
@@ -246,10 +241,8 @@ async def execute_ssh_async(node_info, log_file_path, status_queue=None):
                                     await _update_status(status_queue, node_name, 'success')
                                     return log_file_path
                             except asyncio.TimeoutError:
-                                # No data received, connection is likely still open. Continue polling.
                                 log_file.write("--- Waiting for connection to close... ---\n")
                                 pass
-
                     raise LogoutFailedError("Failed to disconnect from server after sending exit/logout.")
 
         except (asyncio.TimeoutError, PromptTimeoutError, LogoutFailedError):
