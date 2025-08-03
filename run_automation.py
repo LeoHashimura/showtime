@@ -5,7 +5,7 @@ import zipfile
 from datetime import datetime
 import time
 from config_parsers import parse_nodes_from_csv, parse_nodes_from_excel
-from network_operations import execute_ssh_async, execute_telnet_async, PromptTimeoutError
+from network_operations import execute_ssh_async, execute_telnet_async, PromptTimeoutError, LogoutFailedError
 
 # ANSI escape codes for cursor control
 CURSOR_UP = '\x1b[1A'
@@ -16,6 +16,7 @@ COLOR_YELLOW = '\x1b[33m'
 COLOR_GREEN = '\x1b[32m'
 COLOR_RED = '\x1b[31m'
 COLOR_BLUE = '\x1b[34m'
+COLOR_MAGENTA = '\x1b[35m' # New color for logout failure
 COLOR_RESET = '\x1b[0m'
 COLOR_FLASH = '\x1b[5m' # For flashing green
 
@@ -55,7 +56,7 @@ class ProgressDisplay:
             l_node = self.longest_node_name
             s_timeout = self.shortest_node_timeout
             l_timeout = self.longest_node_timeout
-            return f"最短タイムアウト: {s_node} ({s_timeout:.1f}s), 最長タイムアウト: {l_node} ({l_timeout:.1f}s)"
+            return f"Min Timeout:{s_node}({s_timeout:.1f}s),Max Timeout:{l_node}({l_timeout:.1f}s)"
         else:
             prefix = "Errors In: "
             nodes_str = ", ".join(failed_nodes)
@@ -101,6 +102,9 @@ class ProgressDisplay:
             elif status == 'no_prompt':
                 char = '█'
                 color = COLOR_BLUE
+            elif status == 'logout_failed':
+                char = '█'
+                color = COLOR_MAGENTA
             node_status_bar += f"{color}{char}{COLOR_RESET}"
         
         line1_str = f"{node_status_bar}{percent_str}"
@@ -200,6 +204,8 @@ async def main():
             return node['nodename'], None, "TimeoutError"
         except PromptTimeoutError:
             return node['nodename'], None, "PromptTimeoutError"
+        except LogoutFailedError:
+            return node['nodename'], None, "LogoutFailedError"
         except Exception as e:
             return node['nodename'], None, str(e)
 
@@ -220,6 +226,8 @@ async def main():
             display.node_statuses[node_name] = 'timeout'
         elif error == "PromptTimeoutError":
             display.node_statuses[node_name] = 'no_prompt'
+        elif error == "LogoutFailedError":
+            display.node_statuses[node_name] = 'logout_failed'
         elif error:
             display.node_statuses[node_name] = 'error'
         else:
@@ -236,7 +244,7 @@ async def main():
 
     # Move cursor below the display area before printing final message
     sys.stdout.write('\n\n') 
-    print(f"全 {len(tasks)} のノードの取得が完了しました。")
+    print(f"全 {len(successful_log_files)}/{len(tasks)} のノードの取得が完了しました。")
 
     if successful_log_files:
         zip_filename = f"command_output_{timestamp}.zip"

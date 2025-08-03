@@ -1,11 +1,10 @@
-Field,NodeA,NodeB,NodeC
-nodename,Core-Router,Access-Switch,Main-Firewall
-protocol,ssh,telnet,ssh
-ip_address,192.168.1.1,192.168.1.2,192.168.1.3
-login_id,admin,cisco,admin
-login_password,your_secure_pass,another_pass,a_third_pass
-additional_command_1,enable,,
-additional_command_2,,
-command_1,show version,show vlan brief,show status
-command_2,show ip route,show mac address-table,show audit-log
-command_3,show inventory,,
+nodename,openmedssh,openmedtel,Main-Firewall,opport
+protocol,ssh,telnet,ssh,ssh
+ip_address,192.168.0.118,192.168.0.118,192.168.1.3,192.168.0.118
+login_id,root,admin,admin3,Leonard
+login_password,0531,testpass,a_third_pass,NismoS13
+additional_command_1,,,,
+additional_command_2,,,,
+command_1,cd .. && ls -altr,hi my name is alice,show statusf,ls
+command_2,pwd,show interfaces description,show audit-log,pwd
+command_3,show inventory,,,
