@@ -427,10 +427,14 @@ async def cycle_mode(nodes, args):
 
 
 if __name__ == "__main__":
+    os.environ['LANG'] = 'ja_JP.UTF-8'
+    loop = asyncio.get_event_loop()
     try:
-        curses.wrapper(lambda stdscr: asyncio.run(main_wrapped(stdscr)))
+        curses.wrapper(lambda stdscr: loop.run_until_complete(main_wrapped(stdscr)))
     except curses.error as e:
         print(f"Error: curses failed to initialize. Your terminal may not be supported.")
         print(f"({e})")
     except KeyboardInterrupt:
         print("\nCaught keyboard interrupt. Exiting.")
+    finally:
+        loop.close()
