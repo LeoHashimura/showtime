@@ -1,0 +1,141 @@
+
+<!DOCTYPE html>
+<html lang="ja">
+<head>
+    <meta charset="UTF-8">
+    <title>run_cycle.py ユーザーマニュアル</title>
+    <style>
+        body {
+            font-family: -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, "Helvetica Neue", Arial, "Noto Sans", sans-serif;
+            line-height: 1.6;
+            color: #333;
+            max-width: 800px;
+            margin: 0 auto;
+            padding: 20px;
+        }
+        h1, h2, h3 { color: #2c3e50; border-bottom: 2px solid #3498db; padding-bottom: 10px; }
+        code { 
+            background-color: #ecf0f1; 
+            padding: 2px 6px;
+            border-radius: 4px;
+            font-family: "Courier New", Courier, monospace;
+        }
+        pre { 
+            background-color: #ecf0f1; 
+            padding: 15px;
+            border-radius: 5px;
+            white-space: pre-wrap;
+            word-wrap: break-word;
+        }
+        table { 
+            width: 100%; 
+            border-collapse: collapse; 
+            margin-top: 20px;
+        }
+        th, td { 
+            border: 1px solid #bdc3c7; 
+            padding: 10px; 
+            text-align: left; 
+        }
+        th { background-color: #3498db; color: white; }
+        .note { border-left: 5px solid #f1c40f; padding: 15px; background-color: #fef9e7; }
+    </style>
+</head>
+<body>
+
+    <h1>run_cycle.py ユーザーマニュアル</h1>
+
+    <h2>概要 (Overview)</h2>
+    <p>このスクリプトは、複数のネットワーク機器に対して自動的にコマンドを実行し、その結果を記録するためのツールです。単発のコマンド実行と、指定した間隔でコマンドを繰り返し実行するサイクルモードの2つのモードをサポートしています。</p>
+
+    <h2>使い方 (How to Use)</h2>
+    <p>スクリプトは以下の場所から実行します。</p>
+    <pre>/home/change.later/pub/bin/run_cycle.py</pre>
+
+    <h3>単発実行モード (Single-Run Mode)</h3>
+    <p>各ノードに対して一度だけコマンドを実行し、結果をzipファイルにまとめて終了します。</p>
+    <pre>python3 /home/change.later/pub/bin/run_cycle.py &lt;入力ファイル名&gt;</pre>
+    <p><b>例:</b></p>
+    <pre>python3 /home/change.later/pub/bin/run_cycle.py nodes.xlsx</pre>
+
+    <h3>サイクルモード (Cycle Mode)</h3>
+    <p>各ノードに対してコマンドを繰り返し実行し続けます。<code>q</code>キーを押すことで安全に停止できます。</p>
+    <pre>python3 /home/change.later/pub/bin/run_cycle.py &lt;入力ファイル名&gt; --interval &lt;ミリ秒&gt;</pre>
+    <p><b>例 (5秒ごと):</b></p>
+    <pre>python3 /home/change.later/pub/bin/run_cycle.py nodes.xlsx --interval 5000</pre>
+
+    <h2>コマンドラインオプション (Command-Line Options)</h2>
+    <table>
+        <tr>
+            <th>オプション</th>
+            <th>説明</th>
+            <th>必須/任意</th>
+            <th>デフォルト値</th>
+        </tr>
+        <tr>
+            <td><code>input_file</code></td>
+            <td>ノード情報が記載された入力ファイル (.xlsx または .csv)</td>
+            <td>必須</td>
+            <td>なし</td>
+        </tr>
+        <tr>
+            <td><code>--interval &lt;ms&gt;</code></td>
+            <td>サイクルモードを有効にし、コマンドの実行間隔をミリ秒で指定します。</td>
+            <td>任意</td>
+            <td>-1 (単発実行)</td>
+        </tr>
+        <tr>
+            <td><code>--sheet &lt;name/index&gt;</code></td>
+            <td>Excelファイルのシートを名前またはインデックス番号で指定します。</td>
+            <td>任意</td>
+            <td>2 (2番目のシート)</td>
+        </tr>
+    </table>
+
+    <h2>入力ファイルフォーマット (Input File Format)</h2>
+    <p>入力ファイル (nodes.xlsx) は、1行目にヘッダーを、2列目以降に各ノードの情報を記載します。データは<b>縦方向（列ごと）</b>に定義されている必要があります。</p>
+    <div class="note">
+        <p><b>重要:</b> デフォルトでは、Excelファイルの<strong>2番目</strong>のシートを読み込みます。これは、1番目のシートをメモ用などに使えるようにするためです。</p>
+    </div>
+    <table>
+        <tr><th>ヘッダー</th><th>説明</th></tr>
+        <tr><td><code>nodename</code></td><td>ノードの識別名。ログファイル名にも使用されます。</td></tr>
+        <tr><td><code>protocol</code></td><td>接続プロトコル (<code>ssh</code> または <code>telnet</code>)。</td></tr>
+        <tr><td><code>ip_address</code></td><td>ノードのIPアドレス。</td></tr>
+        <tr><td><code>login_id</code></td><td>ログインID。</td></tr>
+        <tr><td><code>login_password</code></td><td>ログインパスワード。</td></tr>
+        <tr><td><code>additional_command_1</code></td><td>ログイン直後に実行する追加コマンド1。</td></tr>
+        <tr><td><code>additional_command_2</code></td><td>追加コマンド1の応答に「:」が含まれる場合に実行する追加コマンド2。</td></tr>
+        <tr><td><code>command_1</code>, <code>command_2</code>, ...</td><td>実行したいコマンドを順番に記載します。</td></tr>
+    </table>
+    <p><b>便利な機能「右方向への自動入力」:</b><br><code>protocol</code>や<code>login_password</code>などの行で、セルが空欄の場合、その行の左側にある最も近いセルの値が自動的にコピーされます。これにより、複数のノードで同じパスワードなどを使い回す場合に、最初のノードに一度入力するだけで済みます。</p>
+
+    <h2>UIの解説 (UI Explanation)</h2>
+    <p>スクリプト実行中のターミナルには、各ノードの現在の状態を示すステータスバーが表示されます。</p>
+    <h3>ステータスインジケーター</h3>
+    <p>各ノードは1文字のステータスで表示されます。問題が発生した場合は、色が変わることで即座に認識できます。</p>
+    <table>
+        <tr><th>文字</th><th>色</th><th>意味</th><th>確認事項</th></tr>
+        <tr><td>S</td><td style="color:green;">緑 (Green)</td><td>成功 (Success)</td><td>正常に処理が完了しました。</td></tr>
+        <tr><td>C</td><td style="color:yellow;">黄 (Yellow)</td><td>接続中 (Connecting)</td><td>ノードへの接続を試みています。</td></tr>
+        <tr><td>E</td><td style="color:green;">緑 (Green)</td><td>コマンド実行中 (Executing)</td><td>コマンドを送信し、応答を待っています。</td></tr>
+        <tr><td>T</td><td style="color:red;">赤 (Red)</td><td>接続タイムアウト (Timeout)</td><td>IPアドレスが正しいか、ファイアウォールでブロックされていないか、機器が応答しているかを確認してください。</td></tr>
+        <tr><td>P</td><td style="color:blue;">青 (Blue)</td><td>プロンプト待機タイムアウト (No Prompt)</td><td>ログインには成功しましたが、コマンドプロンプトを認識できませんでした。ログファイルで、ログイン後の最終出力を確認してください。</td></tr>
+        <tr><td>L</td><td style="color:magenta;">マゼンタ (Magenta)</td><td>ログアウト失敗 (Logout Failed)</td><td>全てのコマンドが完了しましたが、exit/logoutしても接続が切断されませんでした。ログでセッション終了時の様子を確認してください。</td></tr>
+        <tr><td>F</td><td style="color:red;">赤 (Red)</td><td>失敗 (Failure)</td><td>予期せぬエラーが発生しました。ログファイルで<code>*** ERROR ***</code>メッセージを確認してください。</td></tr>
+    </table>
+    <h3>2行目の表示</h3>
+    <ul>
+        <li><b>正常時:</b> タイムアウト設定が最も短いノードと最も長いノードが表示されます。</li>
+        <li><b>エラー発生時:</b> <code>Errors In:</code>に続いて、緑以外のステータスになった全てのノード名が一覧表示されます。</li>
+    </ul>
+
+    <h2>ログファイル (Log Files)</h2>
+    <p>スクリプトを実行すると、実行した場所に<code>output_&lt;タイムスタンプ&gt;</code>という名前のディレクトリが作成されます。</p>
+    <ul>
+        <li>各ノードの全ての通信内容は<code>&lt;ノード名&gt;_&lt;タイムスタンプ&gt;.txt</code>という名前でこのディレクトリ内に保存されます。</li>
+        <li>単発実行モードが正常に完了すると、全てのログファイルが<code>command_output_&lt;タイムスタンプ&gt;.zip</code>というzipファイルにまとめられます。</li>
+    </ul>
+
+</body>
+</html>
