@@ -1,0 +1,5 @@
+fix: Finalize error handling and logout logic
+
+- Restored the Telnet login sequence that was accidentally removed.
+- Implemented a robust, two-step (exit/logout) procedure to handle devices that do not close the connection correctly.
+- Added a new 'logout_failed' status (magenta) for visual feedback.

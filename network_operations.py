@@ -49,10 +49,101 @@ async def execute_telnet_async(node_info, log_file_path, status_queue=None):
                 timeout=10
             )
 
-            # --- Basic Telnet Negotiation and Login (omitted for brevity) ---
-            # ... (The existing login logic remains here) ...
+            # --- Basic Telnet Negotiation ---
+            IAC, DONT, DO, WONT, WILL = b'\xff', b'\xfe', b'\xfd', b'\xfc', b'\xfb'
+            buffer = b''
+            negotiation_attempts = 0
+            await _update_status(status_queue, node_name, 'authenticating')
+            while negotiation_attempts < 10:
+                try:
+                    data = await asyncio.wait_for(reader.read(1024), timeout=0.5)
+                    if not data:
+                        break
+                    
+                    response = b''
+                    i = 0
+                    clean_chunk = b''
+                    while i < len(data):
+                        if data[i:i+1] == IAC:
+                            command = data[i+1:i+2]
+                            option = data[i+2:i+3]
+                            if command == WILL:
+                                response += IAC + DONT + option
+                            elif command == DO:
+                                response += IAC + WONT + option
+                            i += 3
+                        else:
+                            clean_chunk += data[i:i+1]
+                            i += 1
+                    
+                    if response:
+                        writer.write(response)
+                        await writer.drain()
+                    
+                    buffer += clean_chunk
+                    if any(p in buffer.lower() for p in [b'username:', b'login:']):
+                        break
+                except asyncio.TimeoutError:
+                    break
+                finally:
+                    negotiation_attempts += 1
 
-            # --- Command Execution ---
+            log_file.write(f"Received: {buffer.decode(errors='ignore')}\n")
+            log_file.flush()
+            if not any(p in buffer.lower() for p in [b'username:', b'login:']):
+                raise asyncio.TimeoutError("Timeout waiting for username/login prompt.")
+
+            log_file.write(f"--- Sending login ID: {node_info['login_id']} ---\n")
+            log_file.flush()
+            writer.write(node_info['login_id'].encode('ascii') + b"\r\n")
+            await writer.drain()
+
+            buffer = b""
+            prompt_found = False
+            log_file.write("--- Waiting for password prompt ---\n")
+            for _ in range(30):
+                try:
+                    chunk = await asyncio.wait_for(reader.read(100), timeout=0.5)
+                    if not chunk:
+                        break
+                    buffer += chunk.replace(b'\x00', b'')
+                    if 'password:' in buffer.decode('utf-8', errors='ignore').lower():
+                        prompt_found = True
+                        break
+                except asyncio.TimeoutError:
+                    pass
+
+            log_file.write(f"Received: {buffer.decode(errors='ignore')}\n")
+            log_file.flush()
+            if not prompt_found:
+                raise asyncio.TimeoutError("Timeout waiting for password prompt.")
+
+            log_file.write("--- Sending password ---\n")
+            log_file.flush()
+            writer.write(node_info['login_password'].encode('ascii') + b"\r\n")
+            await writer.drain()
+
+            initial_output = await read_until_prompt(reader)
+            log_file.write(initial_output)
+            log_file.flush()
+
+            await _update_status(status_queue, node_name, 'executing_commands')
+            if node_info.get('additional_command_1'):
+                cmd = node_info['additional_command_1']
+                writer.write(cmd.encode('ascii') + b'\r\n')
+                await writer.drain()
+                response = await read_until_prompt(reader)
+                log_file.write(response)
+                log_file.flush()
+                
+                if node_info.get('additional_command_2') and ":" in response:
+                    cmd2 = node_info['additional_command_2']
+                    writer.write(cmd2.encode('ascii') + b'\r\n')
+                    await writer.drain()
+                    response2 = await read_until_prompt(reader)
+                    log_file.write(response2)
+                    log_file.flush()
+
             for cmd in node_info['commands']:
                 writer.write(cmd.encode('ascii') + b'\r\n')
                 await writer.drain()
@@ -114,6 +205,20 @@ async def execute_ssh_async(node_info, log_file_path, status_queue=None):
                     log_file.flush()
 
                     await _update_status(status_queue, node_name, 'executing_commands')
+                    if node_info.get('additional_command_1'):
+                        cmd = node_info['additional_command_1']
+                        process.stdin.write((cmd + '\n').encode('utf-8'))
+                        response = await read_until_prompt(process.stdout)
+                        log_file.write(response)
+                        log_file.flush()
+
+                        if node_info.get('additional_command_2') and ":" in response:
+                            cmd2 = node_info['additional_command_2']
+                            process.stdin.write((cmd2 + '\n').encode('utf-8'))
+                            response2 = await read_until_prompt(process.stdout)
+                            log_file.write(response2)
+                            log_file.flush()
+
                     for cmd in node_info['commands']:
                         process.stdin.write((cmd + '\n').encode('utf-8'))
                         response = await read_until_prompt(process.stdout)
