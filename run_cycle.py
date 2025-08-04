@@ -249,6 +249,14 @@ async def main():
     else:
         # --- CYCLE MODE ---
         print(f"--- Running in cycle mode. Interval: {args.interval}ms ---")
+
+        timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
+        output_dir = f"output_{timestamp}"
+        if os.path.dirname(args.input_file):
+            output_dir = os.path.join(os.path.dirname(args.input_file), output_dir)
+        os.makedirs(output_dir, exist_ok=True)
+        print(f"--- Log files will be saved in: {output_dir} ---")
+
         stop_event = asyncio.Event()
         loop = asyncio.get_event_loop()
         
@@ -260,7 +268,7 @@ async def main():
         display = ProgressDisplay(nodes, status_queue, []) 
 
         async def run_node_cycle(node):
-            log_file_path = f"{node['nodename']}_cycle_log.txt"
+            log_file_path = os.path.join(output_dir, f"{node['nodename']}_cycle_log.txt")
             protocol = node.get('protocol', 'ssh').lower()
             # Assuming execute_ssh_async and execute_telnet_async are adapted to handle cycle mode and stop_event
             if protocol == 'ssh':
