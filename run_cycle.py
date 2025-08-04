@@ -289,8 +289,17 @@ async def main():
 
         updater_task = asyncio.ensure_future(cycle_display_updater(display, stop_event))
 
-        # Run all node tasks concurrently. Exceptions are handled by return_exceptions=True.
-        await asyncio.gather(*tasks, return_exceptions=True)
+        # --- Time limit logic ---
+        time_limit = 600  # 10 minutes
+        try:
+            # Run all node tasks concurrently with a timeout.
+            await asyncio.wait_for(
+                asyncio.gather(*tasks, return_exceptions=True),
+                timeout=time_limit
+            )
+        except asyncio.TimeoutError:
+            print(f"\n--- Time limit of {time_limit} seconds reached. Stopping cycles. ---")
+            stop_event.set()
 
         # Signal the updater to stop after all node tasks are done or an exception occurred.
         stop_event.set()
@@ -308,6 +317,13 @@ async def main():
             zip_filename = f"command_output_cycle_{timestamp}.zip"
             zip_destination = os.path.join(output_dir, zip_filename)
             create_zip_file(log_files, zip_destination)
+
+            # --- Post-command logic for cycle mode ---
+            pdkey = get_pdkey()
+            PDRIVE = "ls -l" # This should be configured as needed
+            post_command = f"{PDRIVE}{pdkey} {zip_destination}\n"
+            print(f"Executing post-run command: {post_command.strip()}")
+            os.system(post_command)
         else:
             print("\nNo log files were found to zip.")
 
