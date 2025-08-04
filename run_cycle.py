@@ -184,11 +184,27 @@ async def main():
         display = ProgressDisplay(nodes, status_queue, nodes_with_timeouts)
 
         async def run_node_task(node):
-            node_timeout = next((t for n, t in nodes_with_timeouts if n == node['nodename']), BASE_NODE_TIMEOUT)
+            node_name = node['nodename']
             log_file_path = os.path.join(output_dir, f"{node['nodename']}_{timestamp}.txt")
-            # Original code had a protocol check here, but it was removed in the new version.
-            # Assuming ssh is the default and only protocol supported for now based on the new code.
-            return await execute_ssh_async(node, log_file_path, status_queue)
+            try:
+                protocol = node.get('protocol', 'ssh').lower()
+                result = None
+                if protocol == 'ssh':
+                    result = await execute_ssh_async(node, log_file_path, status_queue)
+                elif protocol == 'telnet':
+                    result = await execute_telnet_async(node, log_file_path, status_queue)
+                else:
+                    return (node_name, None, f"Unsupported protocol: {protocol}")
+
+                if result is None:
+                    # This can happen if the connection function returns None on a handled error
+                    return (node_name, None, "ConnectionFailed")
+
+                return (node_name, result, None)
+            except (PromptTimeoutError, LogoutFailedError, asyncio.TimeoutError) as e:
+                return (node_name, None, e.__class__.__name__)
+            except Exception as e:
+                return (node_name, None, f"An unexpected error occurred: {e}")
 
         async def display_updater(d):
             while d.completed_count < d.total_nodes:
