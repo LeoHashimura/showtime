@@ -301,6 +301,16 @@ async def main():
             pass
         
         print("\nAll node cycles have been stopped.")
+
+        # --- Zipping logic for cycle mode ---
+        log_files = [os.path.join(output_dir, f) for f in os.listdir(output_dir) if f.endswith("_cycle_log.txt")]
+        if log_files:
+            zip_filename = f"command_output_cycle_{timestamp}.zip"
+            zip_destination = os.path.join(output_dir, zip_filename)
+            create_zip_file(log_files, zip_destination)
+        else:
+            print("\nNo log files were found to zip.")
+
         listener_thread.join() # Wait for the listener thread to finish
 
 if __name__ == "__main__":
