@@ -1,18 +1,13 @@
 import asyncio
-import os
-import sys
-import zipfile
+import os,sys,zipfile
 from datetime import datetime
-import time
-import threading
-import argparse
+import time,threading,argparse
 from config_parsers import parse_nodes_from_csv, parse_nodes_from_excel
 from network_operations import execute_ssh_async, execute_telnet_async, PromptTimeoutError, LogoutFailedError
-
+os.environ['LANG'] = 'ja_JP.UTF-8'
 # ANSI escape codes for cursor control
 CURSOR_UP = '\x1b[1A'
 CLEAR_LINE = '\x1b[2K'
-
 # ANSI escape codes for colors
 COLOR_YELLOW = '\x1b[33m'
 COLOR_GREEN = '\x1b[32m'
@@ -23,11 +18,11 @@ COLOR_RESET = '\x1b[0m'
 COLOR_FLASH = '\x1b[5m' # For flashing green
 
 def get_pdkey():
-    kf, ma = '.pdkey', 5 * 24 * 60 * 60
+    kf, ma = '.pdkey', 5 * 24 * 60 * 60 #5日間
     if os.path.exists(kf) and time.time() - os.path.getmtime(kf) < ma:
         return open(kf).read().strip()
     while True:
-        k = input("xxxxのキーもしくはURLを入力してください: ").split("key=")[-1]
+        k = input("キーもしくはURLを入力してください: ").split("key=")[-1]
         if k:
             open(kf, 'w').write(k)
             return k
@@ -131,7 +126,7 @@ def create_zip_file(files_to_zip, zip_filename):
         print(f"\nError: 次の理由でzip固め損ねました: {e}")
 
 def keyboard_listener(stop_event, loop):
-    print("\nPress Enter to stop the cycle...\n")
+    print("\nEnterキーで停止します\n")
     input()
     loop.call_soon_threadsafe(stop_event.set)
 
@@ -148,11 +143,11 @@ async def main():
     elif args.input_file.lower().endswith(('.xlsx', '.xls')):
         nodes = parse_nodes_from_excel(args.input_file, sheet_name=args.sheet)
     else:
-        print(f"Error: {args.input_file} is not a supported file type.")
+        print(f"{args.input_file} の拡張しはサポートしてないです")
         return
 
     if not nodes:
-        print(f"Error: No nodes found in '{args.input_file}'.")
+        print(f"'{args.input_file}'からノード情報を取得できませんでした。")
         return
 
     if args.interval == -1:
@@ -237,7 +232,7 @@ async def main():
         # Ensure the final update call happens after all tasks are done and before cancellation is fully processed
         await display.update() 
         sys.stdout.write('\n\n') 
-        print(f"全 {len(successful_log_files)}/{len(tasks)} のノードの取得が完了しました。")
+        print(f" {len(successful_log_files)}/{len(tasks)} 台の取得が完了しました。")
 
         if successful_log_files:
             zip_filename = f"command_output_{timestamp}.zip"
@@ -248,14 +243,14 @@ async def main():
 
     else:
         # --- CYCLE MODE ---
-        print(f"--- Running in cycle mode. Interval: {args.interval}ms ---")
+        print(f" {args.interval}ms 間隔でコマンドリストを送っています")
 
         timestamp = datetime.now().strftime("%Y%m%d_%H%M%S")
         output_dir = f"output_{timestamp}"
         if os.path.dirname(args.input_file):
             output_dir = os.path.join(os.path.dirname(args.input_file), output_dir)
         os.makedirs(output_dir, exist_ok=True)
-        print(f"--- Log files will be saved in: {output_dir} ---")
+        print(f"---  {output_dir}へ出力します ---")
 
         stop_event = asyncio.Event()
         loop = asyncio.get_event_loop()
@@ -298,7 +293,7 @@ async def main():
                 timeout=time_limit
             )
         except asyncio.TimeoutError:
-            print(f"\n--- Time limit of {time_limit} seconds reached. Stopping cycles. ---")
+            print(f"\n---  {time_limit} 秒経過したので念の為自動停止しました ---")
             stop_event.set()
 
         # Signal the updater to stop after all node tasks are done or an exception occurred.
@@ -309,7 +304,7 @@ async def main():
         except asyncio.CancelledError:
             pass
         
-        print("\nAll node cycles have been stopped.")
+        print("\n---  [手動停止]全てのノードの処理が完了しました ---")
 
         # --- Zipping logic for cycle mode ---
         log_files = [os.path.join(output_dir, f) for f in os.listdir(output_dir) if f.endswith("_cycle_log.txt")]
@@ -325,12 +320,11 @@ async def main():
             print(f"Executing post-run command: {post_command.strip()}")
             os.system(post_command)
         else:
-            print("\nNo log files were found to zip.")
+            print("\nファイルいっこもないですよ。")
 
         listener_thread.join() # Wait for the listener thread to finish
 
 if __name__ == "__main__":
-    os.environ['LANG'] = 'ja_JP.UTF-8'
     loop = asyncio.get_event_loop()
     try:
         loop.run_until_complete(main())

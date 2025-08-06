@@ -116,6 +116,10 @@ async def execute_telnet_async(node_info, log_file_path, status_queue=None, cycl
             async def run_commands():
                 await _update_status(status_queue, node_name, 'executing_commands')
                 if node_info.get('additional_command_1'):
+                    # Wait for a prompt to ensure the device is ready before sending the command.
+                    log_file.write(await read_until_prompt(reader))
+                    log_file.flush()
+
                     cmd = node_info['additional_command_1']
                     writer.write(cmd.encode('ascii') + b'\r\n')
                     await writer.drain()
@@ -202,6 +206,10 @@ async def execute_ssh_async(node_info, log_file_path, status_queue=None, cycle_i
                     async def run_commands():
                         await _update_status(status_queue, node_name, 'executing_commands')
                         if node_info.get('additional_command_1'):
+                            # Wait for a prompt to ensure the device is ready before sending the command.
+                            log_file.write(await read_until_prompt(process.stdout))
+                            log_file.flush()
+
                             cmd = node_info['additional_command_1']
                             process.stdin.write((cmd + '\n').encode('utf-8'))
                             response = await read_until_prompt(process.stdout)
